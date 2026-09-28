@@ -20,11 +20,11 @@
   "dependencies": {
     "@napi-rs/canvas": "0.1.80",
     "archiver": "7.0.1",
-    "fast-xml-parser": "5.2.5",
+    "fast-xml-parser": "5.11.1",
     "pdfjs-dist": "5.4.149",
     "react": "19.2.0",
     "react-dom": "19.2.0",
-    "xlsx": "0.18.5"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@types/archiver": "7.0.0",
