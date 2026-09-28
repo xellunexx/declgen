@@ -6,6 +6,61 @@ async function loadPdf(filePath: string) {
     data: new Uint8Array(await fs.readFile(filePath)),
   }).promise;
 }
+export interface TextChunk {
+  x: number;
+  y: number;
+  end: number;
+  size: number;
+  t: string;
+}
+// pdf.js may emit each glyph as a separate item (letter-spaced PDFs); blindly
+// joining items with ' ' turns every word into "H u n a n". Merge items into
+// word-level chunks: same visual line, small x-gap = same word. Whitespace is
+// either a real item or a wider x-gap between items — both are honoured, since
+// some PDFs (and their bogus space widths) only have one of the two.
+export function mergeTextItems(
+  items: any[],
+  yBucket = 2,
+  gapEms = 0.15,
+): TextChunk[] {
+  const rows = new Map<number, any[]>();
+  for (const it of items) {
+    if (!('str' in it) || String(it.str) === '') continue;
+    const y = Math.round((it.transform?.[5] ?? 0) / yBucket) * yBucket;
+    const arr = rows.get(y) ?? [];
+    arr.push(it);
+    rows.set(y, arr);
+  }
+  const chunks: TextChunk[] = [];
+  for (const [y, its] of [...rows.entries()].sort((a, b) => b[0] - a[0])) {
+    its.sort((a, b) => (a.transform?.[4] ?? 0) - (b.transform?.[4] ?? 0));
+    let cur: TextChunk | null = null;
+    for (const it of its) {
+      const s = String(it.str),
+        x = it.transform?.[4] ?? 0,
+        w = it.width ?? 0,
+        size = Math.abs(it.transform?.[3]) || it.height || 8;
+      if (s.trim() === '') {
+        if (cur) {
+          chunks.push(cur);
+          cur = null;
+        }
+        continue;
+      }
+      const gap = cur ? x - cur.end : Infinity;
+      if (cur && gap <= Math.max(0.8, size * gapEms)) {
+        cur.t += s;
+        cur.end = Math.max(cur.end, x + w);
+        cur.size = Math.max(cur.size, size);
+      } else {
+        if (cur) chunks.push(cur);
+        cur = { x, y, end: x + w, size, t: s };
+      }
+    }
+    if (cur) chunks.push(cur);
+  }
+  return chunks;
+}
 export async function extractPages(filePath: string): Promise<string[]> {
   const doc = await loadPdf(filePath),
     out: string[] = [];
@@ -15,15 +70,13 @@ export async function extractPages(filePath: string): Promise<string[]> {
     let lastY: number | null = null,
       line: string[] = [];
     const lines: string[] = [];
-    for (const it of c.items as any[]) {
-      if (!('str' in it)) continue;
-      const y = Math.round(it.transform?.[5] ?? 0);
-      if (lastY !== null && Math.abs(y - lastY) > 2) {
+    for (const ch of mergeTextItems(c.items)) {
+      if (lastY !== null && Math.abs(ch.y - lastY) > 2) {
         if (line.length) lines.push(line.join(' '));
         line = [];
       }
-      line.push(String(it.str));
-      lastY = y;
+      line.push(ch.t);
+      lastY = ch.y;
     }
     if (line.length) lines.push(line.join(' '));
     out.push(lines.join('\n'));
@@ -53,17 +106,32 @@ export async function findTables(filePath: string) {
   for (let n = 1; n <= doc.numPages; n++) {
     const p = await doc.getPage(n);
     const c: any = await p.getTextContent();
-    const rows = new Map<number, Array<{ x: number; t: string }>>();
-    for (const it of c.items as any[]) {
-      if (!('str' in it) || !String(it.str).trim()) continue;
-      const y = Math.round((it.transform?.[5] ?? 0) / 3) * 3;
-      const arr = rows.get(y) ?? [];
-      arr.push({ x: it.transform?.[4] ?? 0, t: cell(String(it.str)) });
-      rows.set(y, arr);
+    const chunks = mergeTextItems(c.items, 3);
+    const rows = new Map<number, TextChunk[]>();
+    for (const ch of chunks) {
+      const arr = rows.get(ch.y) ?? [];
+      arr.push(ch);
+      rows.set(ch.y, arr);
     }
+    // Merge word chunks into cells: intra-cell gaps are word spacing (small),
+    // inter-column gaps are wide. Letter-spaced PDFs otherwise emit a column per glyph.
     const matrix = [...rows.entries()]
       .sort((a, b) => b[0] - a[0])
-      .map(([, a]) => a.sort((x, y) => x.x - y.x).map((x) => x.t))
+      .map(([, a]) => {
+        const cells: string[] = [];
+        let cur: TextChunk | null = null;
+        for (const ch of a.sort((x, y) => x.x - y.x)) {
+          if (cur && ch.x - cur.end <= Math.max(4, ch.size * 0.6)) {
+            cur.t += ' ' + ch.t;
+            cur.end = Math.max(cur.end, ch.end);
+          } else {
+            if (cur) cells.push(cell(cur.t));
+            cur = { ...ch };
+          }
+        }
+        if (cur) cells.push(cell(cur.t));
+        return cells;
+      })
       .filter((r) => r.length >= 2);
     if (matrix.length >= 3) {
       const cols = Math.max(...matrix.map((r) => r.length));
