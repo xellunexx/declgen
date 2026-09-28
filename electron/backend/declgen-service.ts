@@ -81,7 +81,8 @@ export class DeclgenService{
   // XML regenerates. Not a redistribution: builds anchor totals exactly; edits stay verbatim.
   async updateDeclItems(rows:any[],caseId:any,baseRevision:any){
     this.assertCaseVersion(caseId,baseRevision);this.case.assertMutable('declaration item edit');
-    const d=this.decl;if(!d)throw new Error('Първо генерирайте декларация (②).');
+    if(!this.decl)throw new Error('Първо генерирайте декларация (②).');
+    const d=clone(this.decl),goods=clone(this.report?.goods_items||[]);
     const items=d.GOODSSHIPMENT?.GOODITEM||[];if(!items.length)throw new Error('Няма позиции за редакция.');
     const list=Array.isArray(rows)?rows:[];if(!list.length)return{ok:true,changed:false};
     const P2=(v:any)=>{const n=Number(String(v??'').replace(',','.'));if(!Number.isFinite(n)||n<0)throw new Error('Невалидно число: '+v);return n.toFixed(2)};
@@ -96,14 +97,14 @@ export class DeclgenService{
       if(p.gross_kg!=null&&String(p.gross_kg)!==''){const g=P6(p.gross_kg);if(Number(g)+1e-9<Number(it.Commodity.GOODSMEASURE.NetMassKg))throw new Error(`Позиция ${r.item_no}: брутото е под нетото.`);it.Commodity.GOODSMEASURE.GrossMassKg=g;t=true}
       if(p.origin!=null&&String(p.origin)!==''){const o=String(p.origin).trim().toUpperCase();if(!/^[A-Z]{2}$/.test(o))throw new Error(`Позиция ${r.item_no}: произходът е 2-буквен ISO код.`);it.ORIGIN.CountryOfOrigin=o;t=true}
       if(p.description!=null&&String(p.description)!==''){it.Commodity.descriptionOfGoods=String(p.description).replace(/\s+/g,' ').trim().slice(0,510);t=true}
-      if(t){touched++;const gi=(this.report?.goods_items||[])[i];if(gi){if(p.price!=null&&String(p.price)!=='')gi.price=it.Commodity.ItemPrice;if(p.statistical_value!=null&&String(p.statistical_value)!=='')gi.statistical_value=it.StatisticalValue;if(p.net_kg!=null&&String(p.net_kg)!=='')gi.net_kg=it.Commodity.GOODSMEASURE.NetMassKg;if(p.gross_kg!=null&&String(p.gross_kg)!=='')gi.gross_kg=it.Commodity.GOODSMEASURE.GrossMassKg;if(p.origin!=null&&String(p.origin)!=='')gi.origin=it.ORIGIN.CountryOfOrigin;if(p.description!=null&&String(p.description)!=='')gi.description=it.Commodity.descriptionOfGoods}}
+      if(t){touched++;const gi=goods[i];if(gi){if(p.price!=null&&String(p.price)!=='')gi.price=it.Commodity.ItemPrice;if(p.statistical_value!=null&&String(p.statistical_value)!=='')gi.statistical_value=it.StatisticalValue;if(p.net_kg!=null&&String(p.net_kg)!=='')gi.net_kg=it.Commodity.GOODSMEASURE.NetMassKg;if(p.gross_kg!=null&&String(p.gross_kg)!=='')gi.gross_kg=it.Commodity.GOODSMEASURE.GrossMassKg;if(p.origin!=null&&String(p.origin)!=='')gi.origin=it.ORIGIN.CountryOfOrigin;if(p.description!=null&&String(p.description)!=='')gi.description=it.Commodity.descriptionOfGoods}}
     }
     if(!touched)return{ok:true,changed:false};
     d.DECHEA.TotalAmountInvoiced=items.reduce((a:number,x:any)=>a+Number(x.Commodity.ItemPrice||0),0).toFixed(2);
     d.DECHEA.TotalGrossMassKg=items.reduce((a:number,x:any)=>a+Number(x.Commodity.GOODSMEASURE.GrossMassKg||0),0).toFixed(6);
-    this.case.bump(`human-corrected declaration items (${touched})`);
-    this.issues=conformance.check(d,this.caseTemplate);this.case.markValidated(!this.issues.some(i=>i.level==='ERROR'));
-    this.xml=xmlio.emitText(d,this.caseTemplate);
+    const issues=conformance.check(d,this.caseTemplate),xml=xmlio.emitText(d,this.caseTemplate),fp=this.case.built_fingerprint||'';
+    this.decl=d;if(this.report?.goods_items)this.report.goods_items=goods;this.issues=issues;this.xml=xml;
+    this.case.bump(`human-corrected declaration items (${touched})`);this.case.markBuilt(fp);this.case.markValidated(!issues.some(i=>i.level==='ERROR'));this.case.markReady(this.currentBlockers());
     await this.persist();this.log(`декларация: ръчна корекция на ${touched} позиция(и) — общите суми следват редакцията`);
     return{ok:true,changed:true,errors:this.issues.filter(i=>i.level==='ERROR').length}
   }
