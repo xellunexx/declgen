@@ -16,9 +16,9 @@ const CLASSIFY_USER = (text: string) =>
 const INVOICE_SYSTEM =
   'You extract data from commercial invoices for Bulgarian customs declarations. Be literal. Never invent data. Missing fields are null. Every numeric field (qty, unit_price, subtotal, totals, weights) is a plain decimal number using a dot (e.g. 18.96), with no currency symbol, no thousand separators and no trailing unit text. Reply strict JSON only.';
 const INVOICE_USER = (text: string, tables: string) =>
-  `Extract this invoice into JSON with fields doc_language, invoice_number, invoice_date (YYYY-MM-DD), currency, seller {company,country,address,postcode,city}, buyer {company,country,address,postcode,city,eori}, price_term, price_term_place, carrier_or_transport, total_goods_value, shipping_cost, shipping_cost_currency, insurance_cost, insurance_currency, grand_total, other_currency_total {amount,currency}|null, total_net_weight_kg, total_gross_weight_kg, pieces, lines [{no,description,hs_code,qty,qty_unit,unit_price,subtotal,origin}]. Every goods or charge row must be retained. Do not merge rows. JSON only.\n\nINVOICE TEXT:\n${text}\n\n${tables}`;
+  `Extract this invoice into JSON with fields doc_language, invoice_number, invoice_date (YYYY-MM-DD), currency, seller {company,country,address,postcode,city}, buyer {company,country,address,postcode,city,eori}, price_term, price_term_place, carrier_or_transport, total_goods_value, shipping_cost, shipping_cost_currency, insurance_cost, insurance_currency, grand_total, other_currency_total {amount,currency}|null, total_net_weight_kg, total_gross_weight_kg, pieces, lines [{no,description,hs_code,qty,qty_unit,unit_price,subtotal,origin}]. Every goods or charge row must be retained. Do not merge rows. For each line, "description" is the full goods description: product name PLUS model/size/details — combine the product-name and product-description cells of that row (and of a shared/merged name cell spanning several variant rows). A bare size or model code like "200mm" is never a valid description by itself. JSON only.\n\nINVOICE TEXT:\n${text}\n\n${tables}`;
 const PACKING_USER = (text: string, tables: string) =>
-  `Extract this packing list as JSON with doc_language, packing_number, packing_date, total_net_weight_kg, total_gross_weight_kg, packages, lines [{no,mark,description,hs_code,qty,qty_unit,net_kg,gross_kg}]. Every table row is one line. JSON only.\n\nPACKING LIST TEXT:\n${text}\n\n${tables}`;
+  `Extract this packing list as JSON with doc_language, packing_number, packing_date, total_net_weight_kg, total_gross_weight_kg, packages, lines [{no,mark,description,hs_code,qty,qty_unit,net_kg,gross_kg}]. Every table row is one line. For each line, "description" is the product name PLUS model/spec (combine the product-name and product-model cells). net_kg/gross_kg are the line's total weights, not per-carton values. JSON only.\n\nPACKING LIST TEXT:\n${text}\n\n${tables}`;
 
 export class ExtractionCancelled extends Error {}
 export class ExtractionError extends Error {}
@@ -67,23 +67,55 @@ export function descriptiveTokens(text: string): Set<string> {
   return out;
 }
 export const looksLikeBareCode = (d: string) => descriptiveTokens(d).size === 0;
-function recoverDesc(code: string, raw: string) {
+const numericCellTok = (t: string) => /^[$€£]?-?[\d.,'’]*\d$/.test(t.trim());
+const UNIT_TOK = new Set(['US', 'PCS', 'KG', 'pcs']);
+function recoverDesc(code: string, raw: string, no?: number) {
   if (!code || !raw) return '';
+  const rawLines = raw.split(/\r?\n/),
+    freq = new Map<string, number>();
+  for (const line of rawLines)
+    for (const t of new Set(line.split(SPLIT)))
+      if (t.length >= 3 && !/\d/.test(t))
+        freq.set(t.toLowerCase(), (freq.get(t.toLowerCase()) || 0) + 1);
+  // Column boilerplate (material/usage words like 'Steel Driling' repeated on
+  // every row) is not a product description — it must not anchor a recovery.
+  const boiler = (w: string) => (freq.get(w) || 0) / rawLines.length > 0.3;
+  // Row-scoped recovery: reconstructed markdown tables keep the item number as
+  // a cell, so a size code shared by several products ('180mm' on rows 37 and
+  // 40) still resolves to this row's own name cells.
+  if (no != null) {
+    const nre = new RegExp(`\\|\\s*${no}\\s*\\|`);
+    const names: string[] = [];
+    for (const line of rawLines) {
+      if (!line.includes('|') || !line.includes(code) || !nre.test(line))
+        continue;
+      for (const cl of line
+        .split('|')
+        .map((s) => s.trim())
+        .filter(Boolean)) {
+        if (numericCellTok(cl) || UNIT_TOK.has(cl)) continue;
+        const dt = descriptiveTokens(cl);
+        if (![...dt].some((w) => !boiler(w))) continue;
+        if (!names.includes(cl)) names.push(cl);
+      }
+      if (names.length) break;
+    }
+    if (names.length)
+      return cell(
+        names.join(' ') + (names.join(' ').includes(code) ? '' : ` ${code}`),
+      );
+  }
   const cands = new Map<string, number>();
-  for (const line of raw.split(/\r?\n/)) {
+  for (const line of rawLines) {
     if (!line.includes(code)) continue;
     const words: string[] = [];
     for (const t of line.split(SPLIT)) {
-      if (
-        t.length < 3 ||
-        /\d/.test(t) ||
-        ['US', 'PCS', 'KG', 'pcs'].includes(t)
-      )
-        continue;
+      if (t.length < 3 || /\d/.test(t) || UNIT_TOK.has(t)) continue;
       words.push(t);
     }
-    const cand = words.join(' ').trim();
-    if (descriptiveTokens(cand).size >= 2)
+    const cand = words.join(' ').trim(),
+      dt = descriptiveTokens(cand);
+    if (dt.size >= 2 && [...dt].some((w) => !boiler(w)))
       cands.set(cand, (cands.get(cand) || 0) + 1);
   }
   return cands.size === 1 ? [...cands.keys()][0] : '';
@@ -180,7 +212,7 @@ export function validateInvoice(obj: any, rawText = '') {
         `line ${i}: hs_code '${rawHs}' discarded (implausible length/chapter - likely an article/ERP code)`,
       );
     if (desc && looksLikeBareCode(desc)) {
-      const fixed = recoverDesc(desc, rawText);
+      const fixed = recoverDesc(desc, rawText, Number(ln.no || i));
       if (fixed) {
         warnings.push(
           `line ${i}: description was bare model code '${desc}' -> recovered from invoice text: '${fixed.slice(0, 60)}'`,
@@ -1232,7 +1264,7 @@ export async function extractInvoice(
         { required_keys: ['lines'], max_tokens: 8192, reasoning_effort: 'low' },
       );
       try {
-        parts.push(validateInvoice(obj, pages[i]));
+        parts.push(validateInvoice(obj, pages[i] + '\n' + block));
       } catch (e) {
         if (String(e).includes('no line items'))
           parts.push({
@@ -1256,5 +1288,5 @@ export async function extractInvoice(
     ],
     { required_keys: ['lines'], max_tokens: 16384, reasoning_effort: 'medium' },
   );
-  return validateInvoice(obj, text);
+  return validateInvoice(obj, text + '\n' + block);
 }
