@@ -1,21 +1,353 @@
-import fs from 'node:fs/promises'; import { XMLParser } from 'fast-xml-parser';
-export const IE_NS='http://ecs.dgtaxud.ec';
-export interface SeqRef{sequenceNumber:string;type:string;referenceNumber:string} export interface ExAddress{streetAndNumber:string;postcode:string;city:string;country:string}
-export interface ExExportOperation{LRN:string;declarationType:string;additionalDeclarationType:string;presentationOfTheGoodsDateAndTime:string;security:string;totalAmountInvoiced:string;invoiceCurrency:string}
-export interface ExAuthorisation{sequenceNumber:string;type:string;referenceNumber:string;holderOfAuthorisation:string}
-export interface ExCommodityCode{harmonizedSystemSubHeadingCode:string;combinedNomenclatureCode:string;TARICAdditionalCode:any[]}
-export interface ExGoodsMeasure{grossMass:string;netMass:string;supplementaryUnits?:string|null;supplementaryUnitsCode?:string|null}
-export interface ExCommodity{descriptionOfGoods:string;CommodityCode:ExCommodityCode;GoodsMeasure:ExGoodsMeasure}
-export interface ExPackaging{sequenceNumber:string;typeOfPackages:string;numberOfPackages:string;shippingMarks:string}
-export interface ExGoodItem{declarationGoodsItemNumber:string;statisticalValue:string;requestedProcedure:string;previousProcedure:string;countryOfOrigin:string;Commodity:ExCommodity;Packaging:ExPackaging;SupportingDocument:SeqRef[];AdditionalReference:SeqRef[];AdditionalInformation?:any|null}
-export interface ExConsignee{name:string;Address:ExAddress} export interface TransportMeansSeq{sequenceNumber:string;typeOfIdentification:string;identificationNumber:string;nationality:string}
-export interface ExConsignment{containerIndicator:string;inlandModeOfTransport:string;modeOfTransportAtTheBorder:string;grossMass:string;Carrier?:string|null;Consignee?:ExConsignee|null;TransportEquipment:any[];LocationOfGoods?:any|null;DepartureTransportMeans:TransportMeansSeq[];CountryOfRoutingOfConsignment:any[];ActiveBorderTransportMeans?:TransportMeansSeq|null;TransportDocument:SeqRef[];TransportCharges:string}
-export interface ExShipment{natureOfTransaction:string;countryOfExport:string;countryOfDestination:string;DeliveryTerms?:any|null;Consignment:ExConsignment;GoodsItem:ExGoodItem[]}
-export interface ExDeclaration{messageSender:string;messageSenderCode:string;messageRecipient:string;messageRecipientCode:string;preparationDateAndTime:string;messageIdentification:string;messageType:string;ExportOperation:ExExportOperation;Authorisation:ExAuthorisation[];CustomsOfficeOfExport:string;CustomsOfficeOfExitDeclared:string;Exporter:string;Declarant:string;Representative:string;RepresentativeStatus:string;CurrencyExchange:[string,string];GoodsShipment:ExShipment}
-export function newExport():ExDeclaration{return{messageSender:'TRA.APP',messageSenderCode:'',messageRecipient:'NECA.BG',messageRecipientCode:'',preparationDateAndTime:'',messageIdentification:'1',messageType:'BG515C',ExportOperation:{LRN:'',declarationType:'EX',additionalDeclarationType:'A',presentationOfTheGoodsDateAndTime:'',security:'2',totalAmountInvoiced:'0.00',invoiceCurrency:'EUR'},Authorisation:[],CustomsOfficeOfExport:'',CustomsOfficeOfExitDeclared:'',Exporter:'',Declarant:'',Representative:'',RepresentativeStatus:'2',CurrencyExchange:['EUR','1.00000'],GoodsShipment:{natureOfTransaction:'11',countryOfExport:'BG',countryOfDestination:'',DeliveryTerms:null,Consignment:{containerIndicator:'0',inlandModeOfTransport:'3',modeOfTransportAtTheBorder:'3',grossMass:'0.000000',Carrier:null,Consignee:null,TransportEquipment:[],LocationOfGoods:null,DepartureTransportMeans:[],CountryOfRoutingOfConsignment:[],ActiveBorderTransportMeans:null,TransportDocument:[],TransportCharges:'D'},GoodsItem:[]}}}
-const arr=(v:any)=>v==null?[]:Array.isArray(v)?v:[v],s=(v:any,d='')=>v==null?d:String(v); const refs=(v:any)=>arr(v).map((r:any,i:number)=>({sequenceNumber:s(r.sequenceNumber,String(i+1)),type:s(r.type),referenceNumber:s(r.referenceNumber)}));
-export function parseExportText(xml:string):ExDeclaration{if(/<!doctype|<!entity/i.test(xml))throw new Error('XML файлът съдържа DTD/entity и не се приема за импорт.');const p=new XMLParser({ignoreAttributes:false,removeNSPrefix:true,parseTagValue:false}).parse(xml),r=p.BG515C;if(!r)throw new Error('not a BG515C XML');const d=newExport(),eo=r.ExportOperation||{},sh=r.GoodsShipment||{},cx=sh.Consignment||{};Object.assign(d,{messageSender:s(r.messageSender),messageSenderCode:s(r.messageSenderCode),messageRecipient:s(r.messageRecipient),messageRecipientCode:s(r.messageRecipientCode),preparationDateAndTime:s(r.preparationDateAndTime),messageIdentification:s(r.messageIdentification,'1'),messageType:s(r.messageType,'BG515C'),CustomsOfficeOfExport:s(r.CustomsOfficeOfExport?.referenceNumber),CustomsOfficeOfExitDeclared:s(r.CustomsOfficeOfExitDeclared?.referenceNumber),Exporter:s(r.Exporter?.identificationNumber),Declarant:s(r.Declarant?.identificationNumber),Representative:s(r.Representative?.identificationNumber),RepresentativeStatus:s(r.Representative?.status,'2'),CurrencyExchange:[s(r.CurrencyExchange?.internalCurrencyUnit,'EUR'),s(r.CurrencyExchange?.exchangeRate,'1.00000')]});d.ExportOperation={LRN:s(eo.LRN),declarationType:s(eo.declarationType,'EX'),additionalDeclarationType:s(eo.additionalDeclarationType,'A'),presentationOfTheGoodsDateAndTime:s(eo.presentationOfTheGoodsDateAndTime),security:s(eo.security,'2'),totalAmountInvoiced:s(eo.totalAmountInvoiced,'0.00'),invoiceCurrency:s(eo.invoiceCurrency,'EUR')};d.GoodsShipment={natureOfTransaction:s(sh.natureOfTransaction,'11'),countryOfExport:s(sh.countryOfExport,'BG'),countryOfDestination:s(sh.countryOfDestination),DeliveryTerms:sh.DeliveryTerms?{incotermCode:s(sh.DeliveryTerms.incotermCode),location:s(sh.DeliveryTerms.location),country:s(sh.DeliveryTerms.country)}:null,Consignment:{containerIndicator:s(cx.containerIndicator,'0'),inlandModeOfTransport:s(cx.inlandModeOfTransport,'3'),modeOfTransportAtTheBorder:s(cx.modeOfTransportAtTheBorder,'3'),grossMass:s(cx.grossMass,'0.000000'),Carrier:s(cx.Carrier?.identificationNumber)||null,Consignee:cx.Consignee?{name:s(cx.Consignee.name),Address:{streetAndNumber:s(cx.Consignee.Address?.streetAndNumber),postcode:s(cx.Consignee.Address?.postcode),city:s(cx.Consignee.Address?.city),country:s(cx.Consignee.Address?.country)}}:null,TransportEquipment:arr(cx.TransportEquipment),LocationOfGoods:cx.LocationOfGoods||null,DepartureTransportMeans:arr(cx.DepartureTransportMeans),CountryOfRoutingOfConsignment:arr(cx.CountryOfRoutingOfConsignment),ActiveBorderTransportMeans:cx.ActiveBorderTransportMeans||null,TransportDocument:refs(cx.TransportDocument),TransportCharges:s(cx.TransportCharges?.methodOfPayment,'D')},GoodsItem:arr(sh.GoodsItem).map((g:any,i:number)=>({declarationGoodsItemNumber:s(g.declarationGoodsItemNumber,String(i+1)),statisticalValue:s(g.statisticalValue,'0.00'),requestedProcedure:s(g.Procedure?.requestedProcedure,'10'),previousProcedure:s(g.Procedure?.previousProcedure,'00'),countryOfOrigin:s(g.Origin?.countryOfOrigin,'BG'),Commodity:{descriptionOfGoods:s(g.Commodity?.descriptionOfGoods),CommodityCode:{harmonizedSystemSubHeadingCode:s(g.Commodity?.CommodityCode?.harmonizedSystemSubHeadingCode),combinedNomenclatureCode:s(g.Commodity?.CommodityCode?.combinedNomenclatureCode),TARICAdditionalCode:arr(g.Commodity?.CommodityCode?.TARICAdditionalCode)},GoodsMeasure:{grossMass:s(g.Commodity?.GoodsMeasure?.grossMass,'0.000000'),netMass:s(g.Commodity?.GoodsMeasure?.netMass,'0.000000'),supplementaryUnits:g.Commodity?.GoodsMeasure?.supplementaryUnits==null?null:s(g.Commodity.GoodsMeasure.supplementaryUnits),supplementaryUnitsCode:g.Commodity?.GoodsMeasure?.supplementaryUnitsCode==null?null:s(g.Commodity.GoodsMeasure.supplementaryUnitsCode)}},Packaging:{sequenceNumber:s(g.Packaging?.sequenceNumber,'1'),typeOfPackages:s(g.Packaging?.typeOfPackages,'PC'),numberOfPackages:s(g.Packaging?.numberOfPackages,'0'),shippingMarks:s(g.Packaging?.shippingMarks)},SupportingDocument:refs(g.SupportingDocument),AdditionalReference:refs(g.AdditionalReference),AdditionalInformation:g.AdditionalInformation||null}))};return d}
-export async function parseExportFile(file:string){return parseExportText(await fs.readFile(file,'utf8'))}
-const esc=(v:any)=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;'),tag=(n:string,v:any)=>`<${n}>${esc(v)}</${n}>`,ref=(n:string,r:any)=>`<${n}>${tag('sequenceNumber',r.sequenceNumber)}${tag('type',r.type)}${tag('referenceNumber',r.referenceNumber)}</${n}>`;
-export function emitText(d:ExDeclaration){const eo=d.ExportOperation,sh=d.GoodsShipment,cx=sh.Consignment;let x=`<ie:BG515C xmlns:ie="${IE_NS}">${tag('messageSender',d.messageSender)}${tag('messageSenderCode',d.messageSenderCode)}${tag('messageRecipient',d.messageRecipient)}${tag('messageRecipientCode',d.messageRecipientCode)}${tag('preparationDateAndTime',d.preparationDateAndTime)}${tag('messageIdentification',d.messageIdentification)}${tag('messageType',d.messageType)}<ExportOperation>${tag('LRN',eo.LRN)}${tag('declarationType',eo.declarationType)}${tag('additionalDeclarationType',eo.additionalDeclarationType)}${tag('presentationOfTheGoodsDateAndTime',eo.presentationOfTheGoodsDateAndTime)}${tag('security',eo.security)}${tag('totalAmountInvoiced',eo.totalAmountInvoiced)}${tag('invoiceCurrency',eo.invoiceCurrency)}</ExportOperation>`+(d.Authorisation||[]).map(a=>`<Authorisation>${tag('sequenceNumber',a.sequenceNumber)}${tag('type',a.type)}${tag('referenceNumber',a.referenceNumber)}${tag('holderOfAuthorisation',a.holderOfAuthorisation)}</Authorisation>`).join('')+`<CustomsOfficeOfExport>${tag('referenceNumber',d.CustomsOfficeOfExport)}</CustomsOfficeOfExport><CustomsOfficeOfExitDeclared>${tag('referenceNumber',d.CustomsOfficeOfExitDeclared)}</CustomsOfficeOfExitDeclared><Exporter>${tag('identificationNumber',d.Exporter)}</Exporter><Declarant>${tag('identificationNumber',d.Declarant)}</Declarant><Representative>${tag('identificationNumber',d.Representative)}${tag('status',d.RepresentativeStatus)}</Representative><CurrencyExchange>${tag('internalCurrencyUnit',d.CurrencyExchange[0])}${tag('exchangeRate',d.CurrencyExchange[1])}</CurrencyExchange><GoodsShipment>${tag('natureOfTransaction',sh.natureOfTransaction)}${tag('countryOfExport',sh.countryOfExport)}${tag('countryOfDestination',sh.countryOfDestination)}`+(sh.DeliveryTerms?`<DeliveryTerms>${tag('incotermCode',sh.DeliveryTerms.incotermCode)}${tag('location',sh.DeliveryTerms.location)}${tag('country',sh.DeliveryTerms.country)}</DeliveryTerms>`:'')+`<Consignment>${tag('containerIndicator',cx.containerIndicator)}${tag('inlandModeOfTransport',cx.inlandModeOfTransport)}${tag('modeOfTransportAtTheBorder',cx.modeOfTransportAtTheBorder)}${tag('grossMass',cx.grossMass)}`+(cx.Carrier?`<Carrier>${tag('identificationNumber',cx.Carrier)}</Carrier>`:'')+(cx.Consignee?`<Consignee>${tag('name',cx.Consignee.name)}<Address>${tag('streetAndNumber',cx.Consignee.Address.streetAndNumber)}${tag('postcode',cx.Consignee.Address.postcode)}${tag('city',cx.Consignee.Address.city)}${tag('country',cx.Consignee.Address.country)}</Address></Consignee>`:'')+(cx.TransportDocument||[]).map(r=>ref('TransportDocument',r)).join('')+`<TransportCharges>${tag('methodOfPayment',cx.TransportCharges)}</TransportCharges></Consignment>`+(sh.GoodsItem||[]).map((it:any)=>`<GoodsItem>${tag('declarationGoodsItemNumber',it.declarationGoodsItemNumber)}${tag('statisticalValue',it.statisticalValue)}<Procedure>${tag('requestedProcedure',it.requestedProcedure)}${tag('previousProcedure',it.previousProcedure)}</Procedure><Origin>${tag('countryOfOrigin',it.countryOfOrigin)}</Origin><Commodity>${tag('descriptionOfGoods',it.Commodity.descriptionOfGoods)}<CommodityCode>${tag('harmonizedSystemSubHeadingCode',it.Commodity.CommodityCode.harmonizedSystemSubHeadingCode)}${tag('combinedNomenclatureCode',it.Commodity.CommodityCode.combinedNomenclatureCode)}</CommodityCode><GoodsMeasure>${tag('grossMass',it.Commodity.GoodsMeasure.grossMass)}${tag('netMass',it.Commodity.GoodsMeasure.netMass)}${it.Commodity.GoodsMeasure.supplementaryUnits!=null?tag('supplementaryUnits',it.Commodity.GoodsMeasure.supplementaryUnits)+(it.Commodity.GoodsMeasure.supplementaryUnitsCode?tag('supplementaryUnitsCode',it.Commodity.GoodsMeasure.supplementaryUnitsCode):''):''}</GoodsMeasure></Commodity><Packaging>${tag('sequenceNumber',it.Packaging.sequenceNumber)}${tag('typeOfPackages',it.Packaging.typeOfPackages)}${tag('numberOfPackages',it.Packaging.numberOfPackages)}${tag('shippingMarks',it.Packaging.shippingMarks)}</Packaging>${(it.SupportingDocument||[]).map((r:any)=>ref('SupportingDocument',r)).join('')}${(it.AdditionalReference||[]).map((r:any)=>ref('AdditionalReference',r)).join('')}</GoodsItem>`).join('')+'</GoodsShipment></ie:BG515C>';return `<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n\n${x}\n`}
-export async function emitFile(d:ExDeclaration,file:string){await fs.writeFile(file,emitText(d),'utf8')}
+import fs from 'node:fs/promises';
+import { XMLParser } from 'fast-xml-parser';
+export const IE_NS = 'http://ecs.dgtaxud.ec';
+export interface SeqRef {
+  sequenceNumber: string;
+  type: string;
+  referenceNumber: string;
+}
+export interface ExAddress {
+  streetAndNumber: string;
+  postcode: string;
+  city: string;
+  country: string;
+}
+export interface ExExportOperation {
+  LRN: string;
+  declarationType: string;
+  additionalDeclarationType: string;
+  presentationOfTheGoodsDateAndTime: string;
+  security: string;
+  totalAmountInvoiced: string;
+  invoiceCurrency: string;
+}
+export interface ExAuthorisation {
+  sequenceNumber: string;
+  type: string;
+  referenceNumber: string;
+  holderOfAuthorisation: string;
+}
+export interface ExCommodityCode {
+  harmonizedSystemSubHeadingCode: string;
+  combinedNomenclatureCode: string;
+  TARICAdditionalCode: any[];
+}
+export interface ExGoodsMeasure {
+  grossMass: string;
+  netMass: string;
+  supplementaryUnits?: string | null;
+  supplementaryUnitsCode?: string | null;
+}
+export interface ExCommodity {
+  descriptionOfGoods: string;
+  CommodityCode: ExCommodityCode;
+  GoodsMeasure: ExGoodsMeasure;
+}
+export interface ExPackaging {
+  sequenceNumber: string;
+  typeOfPackages: string;
+  numberOfPackages: string;
+  shippingMarks: string;
+}
+export interface ExGoodItem {
+  declarationGoodsItemNumber: string;
+  statisticalValue: string;
+  requestedProcedure: string;
+  previousProcedure: string;
+  countryOfOrigin: string;
+  Commodity: ExCommodity;
+  Packaging: ExPackaging;
+  SupportingDocument: SeqRef[];
+  AdditionalReference: SeqRef[];
+  AdditionalInformation?: any | null;
+}
+export interface ExConsignee {
+  name: string;
+  Address: ExAddress;
+}
+export interface TransportMeansSeq {
+  sequenceNumber: string;
+  typeOfIdentification: string;
+  identificationNumber: string;
+  nationality: string;
+}
+export interface ExConsignment {
+  containerIndicator: string;
+  inlandModeOfTransport: string;
+  modeOfTransportAtTheBorder: string;
+  grossMass: string;
+  Carrier?: string | null;
+  Consignee?: ExConsignee | null;
+  TransportEquipment: any[];
+  LocationOfGoods?: any | null;
+  DepartureTransportMeans: TransportMeansSeq[];
+  CountryOfRoutingOfConsignment: any[];
+  ActiveBorderTransportMeans?: TransportMeansSeq | null;
+  TransportDocument: SeqRef[];
+  TransportCharges: string;
+}
+export interface ExShipment {
+  natureOfTransaction: string;
+  countryOfExport: string;
+  countryOfDestination: string;
+  DeliveryTerms?: any | null;
+  Consignment: ExConsignment;
+  GoodsItem: ExGoodItem[];
+}
+export interface ExDeclaration {
+  messageSender: string;
+  messageSenderCode: string;
+  messageRecipient: string;
+  messageRecipientCode: string;
+  preparationDateAndTime: string;
+  messageIdentification: string;
+  messageType: string;
+  ExportOperation: ExExportOperation;
+  Authorisation: ExAuthorisation[];
+  CustomsOfficeOfExport: string;
+  CustomsOfficeOfExitDeclared: string;
+  Exporter: string;
+  Declarant: string;
+  Representative: string;
+  RepresentativeStatus: string;
+  CurrencyExchange: [string, string];
+  GoodsShipment: ExShipment;
+}
+export function newExport(): ExDeclaration {
+  return {
+    messageSender: 'TRA.APP',
+    messageSenderCode: '',
+    messageRecipient: 'NECA.BG',
+    messageRecipientCode: '',
+    preparationDateAndTime: '',
+    messageIdentification: '1',
+    messageType: 'BG515C',
+    ExportOperation: {
+      LRN: '',
+      declarationType: 'EX',
+      additionalDeclarationType: 'A',
+      presentationOfTheGoodsDateAndTime: '',
+      security: '2',
+      totalAmountInvoiced: '0.00',
+      invoiceCurrency: 'EUR',
+    },
+    Authorisation: [],
+    CustomsOfficeOfExport: '',
+    CustomsOfficeOfExitDeclared: '',
+    Exporter: '',
+    Declarant: '',
+    Representative: '',
+    RepresentativeStatus: '2',
+    CurrencyExchange: ['EUR', '1.00000'],
+    GoodsShipment: {
+      natureOfTransaction: '11',
+      countryOfExport: 'BG',
+      countryOfDestination: '',
+      DeliveryTerms: null,
+      Consignment: {
+        containerIndicator: '0',
+        inlandModeOfTransport: '3',
+        modeOfTransportAtTheBorder: '3',
+        grossMass: '0.000000',
+        Carrier: null,
+        Consignee: null,
+        TransportEquipment: [],
+        LocationOfGoods: null,
+        DepartureTransportMeans: [],
+        CountryOfRoutingOfConsignment: [],
+        ActiveBorderTransportMeans: null,
+        TransportDocument: [],
+        TransportCharges: 'D',
+      },
+      GoodsItem: [],
+    },
+  };
+}
+const arr = (v: any) => (v == null ? [] : Array.isArray(v) ? v : [v]),
+  s = (v: any, d = '') => (v == null ? d : String(v));
+const refs = (v: any) =>
+  arr(v).map((r: any, i: number) => ({
+    sequenceNumber: s(r.sequenceNumber, String(i + 1)),
+    type: s(r.type),
+    referenceNumber: s(r.referenceNumber),
+  }));
+export function parseExportText(xml: string): ExDeclaration {
+  if (/<!doctype|<!entity/i.test(xml))
+    throw new Error('XML файлът съдържа DTD/entity и не се приема за импорт.');
+  const p = new XMLParser({
+      ignoreAttributes: false,
+      removeNSPrefix: true,
+      parseTagValue: false,
+    }).parse(xml),
+    r = p.BG515C;
+  if (!r) throw new Error('not a BG515C XML');
+  const d = newExport(),
+    eo = r.ExportOperation || {},
+    sh = r.GoodsShipment || {},
+    cx = sh.Consignment || {};
+  Object.assign(d, {
+    messageSender: s(r.messageSender),
+    messageSenderCode: s(r.messageSenderCode),
+    messageRecipient: s(r.messageRecipient),
+    messageRecipientCode: s(r.messageRecipientCode),
+    preparationDateAndTime: s(r.preparationDateAndTime),
+    messageIdentification: s(r.messageIdentification, '1'),
+    messageType: s(r.messageType, 'BG515C'),
+    CustomsOfficeOfExport: s(r.CustomsOfficeOfExport?.referenceNumber),
+    CustomsOfficeOfExitDeclared: s(
+      r.CustomsOfficeOfExitDeclared?.referenceNumber,
+    ),
+    Exporter: s(r.Exporter?.identificationNumber),
+    Declarant: s(r.Declarant?.identificationNumber),
+    Representative: s(r.Representative?.identificationNumber),
+    RepresentativeStatus: s(r.Representative?.status, '2'),
+    CurrencyExchange: [
+      s(r.CurrencyExchange?.internalCurrencyUnit, 'EUR'),
+      s(r.CurrencyExchange?.exchangeRate, '1.00000'),
+    ],
+  });
+  d.ExportOperation = {
+    LRN: s(eo.LRN),
+    declarationType: s(eo.declarationType, 'EX'),
+    additionalDeclarationType: s(eo.additionalDeclarationType, 'A'),
+    presentationOfTheGoodsDateAndTime: s(eo.presentationOfTheGoodsDateAndTime),
+    security: s(eo.security, '2'),
+    totalAmountInvoiced: s(eo.totalAmountInvoiced, '0.00'),
+    invoiceCurrency: s(eo.invoiceCurrency, 'EUR'),
+  };
+  d.GoodsShipment = {
+    natureOfTransaction: s(sh.natureOfTransaction, '11'),
+    countryOfExport: s(sh.countryOfExport, 'BG'),
+    countryOfDestination: s(sh.countryOfDestination),
+    DeliveryTerms: sh.DeliveryTerms
+      ? {
+          incotermCode: s(sh.DeliveryTerms.incotermCode),
+          location: s(sh.DeliveryTerms.location),
+          country: s(sh.DeliveryTerms.country),
+        }
+      : null,
+    Consignment: {
+      containerIndicator: s(cx.containerIndicator, '0'),
+      inlandModeOfTransport: s(cx.inlandModeOfTransport, '3'),
+      modeOfTransportAtTheBorder: s(cx.modeOfTransportAtTheBorder, '3'),
+      grossMass: s(cx.grossMass, '0.000000'),
+      Carrier: s(cx.Carrier?.identificationNumber) || null,
+      Consignee: cx.Consignee
+        ? {
+            name: s(cx.Consignee.name),
+            Address: {
+              streetAndNumber: s(cx.Consignee.Address?.streetAndNumber),
+              postcode: s(cx.Consignee.Address?.postcode),
+              city: s(cx.Consignee.Address?.city),
+              country: s(cx.Consignee.Address?.country),
+            },
+          }
+        : null,
+      TransportEquipment: arr(cx.TransportEquipment),
+      LocationOfGoods: cx.LocationOfGoods || null,
+      DepartureTransportMeans: arr(cx.DepartureTransportMeans),
+      CountryOfRoutingOfConsignment: arr(cx.CountryOfRoutingOfConsignment),
+      ActiveBorderTransportMeans: cx.ActiveBorderTransportMeans || null,
+      TransportDocument: refs(cx.TransportDocument),
+      TransportCharges: s(cx.TransportCharges?.methodOfPayment, 'D'),
+    },
+    GoodsItem: arr(sh.GoodsItem).map((g: any, i: number) => ({
+      declarationGoodsItemNumber: s(
+        g.declarationGoodsItemNumber,
+        String(i + 1),
+      ),
+      statisticalValue: s(g.statisticalValue, '0.00'),
+      requestedProcedure: s(g.Procedure?.requestedProcedure, '10'),
+      previousProcedure: s(g.Procedure?.previousProcedure, '00'),
+      countryOfOrigin: s(g.Origin?.countryOfOrigin, 'BG'),
+      Commodity: {
+        descriptionOfGoods: s(g.Commodity?.descriptionOfGoods),
+        CommodityCode: {
+          harmonizedSystemSubHeadingCode: s(
+            g.Commodity?.CommodityCode?.harmonizedSystemSubHeadingCode,
+          ),
+          combinedNomenclatureCode: s(
+            g.Commodity?.CommodityCode?.combinedNomenclatureCode,
+          ),
+          TARICAdditionalCode: arr(
+            g.Commodity?.CommodityCode?.TARICAdditionalCode,
+          ),
+        },
+        GoodsMeasure: {
+          grossMass: s(g.Commodity?.GoodsMeasure?.grossMass, '0.000000'),
+          netMass: s(g.Commodity?.GoodsMeasure?.netMass, '0.000000'),
+          supplementaryUnits:
+            g.Commodity?.GoodsMeasure?.supplementaryUnits == null
+              ? null
+              : s(g.Commodity.GoodsMeasure.supplementaryUnits),
+          supplementaryUnitsCode:
+            g.Commodity?.GoodsMeasure?.supplementaryUnitsCode == null
+              ? null
+              : s(g.Commodity.GoodsMeasure.supplementaryUnitsCode),
+        },
+      },
+      Packaging: {
+        sequenceNumber: s(g.Packaging?.sequenceNumber, '1'),
+        typeOfPackages: s(g.Packaging?.typeOfPackages, 'PC'),
+        numberOfPackages: s(g.Packaging?.numberOfPackages, '0'),
+        shippingMarks: s(g.Packaging?.shippingMarks),
+      },
+      SupportingDocument: refs(g.SupportingDocument),
+      AdditionalReference: refs(g.AdditionalReference),
+      AdditionalInformation: g.AdditionalInformation || null,
+    })),
+  };
+  return d;
+}
+export async function parseExportFile(file: string) {
+  return parseExportText(await fs.readFile(file, 'utf8'));
+}
+const esc = (v: any) =>
+    String(v ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;'),
+  tag = (n: string, v: any) => `<${n}>${esc(v)}</${n}>`,
+  ref = (n: string, r: any) =>
+    `<${n}>${tag('sequenceNumber', r.sequenceNumber)}${tag('type', r.type)}${tag('referenceNumber', r.referenceNumber)}</${n}>`;
+export function emitText(d: ExDeclaration) {
+  const eo = d.ExportOperation,
+    sh = d.GoodsShipment,
+    cx = sh.Consignment;
+  let x =
+    `<ie:BG515C xmlns:ie="${IE_NS}">${tag('messageSender', d.messageSender)}${tag('messageSenderCode', d.messageSenderCode)}${tag('messageRecipient', d.messageRecipient)}${tag('messageRecipientCode', d.messageRecipientCode)}${tag('preparationDateAndTime', d.preparationDateAndTime)}${tag('messageIdentification', d.messageIdentification)}${tag('messageType', d.messageType)}<ExportOperation>${tag('LRN', eo.LRN)}${tag('declarationType', eo.declarationType)}${tag('additionalDeclarationType', eo.additionalDeclarationType)}${tag('presentationOfTheGoodsDateAndTime', eo.presentationOfTheGoodsDateAndTime)}${tag('security', eo.security)}${tag('totalAmountInvoiced', eo.totalAmountInvoiced)}${tag('invoiceCurrency', eo.invoiceCurrency)}</ExportOperation>` +
+    (d.Authorisation || [])
+      .map(
+        (a) =>
+          `<Authorisation>${tag('sequenceNumber', a.sequenceNumber)}${tag('type', a.type)}${tag('referenceNumber', a.referenceNumber)}${tag('holderOfAuthorisation', a.holderOfAuthorisation)}</Authorisation>`,
+      )
+      .join('') +
+    `<CustomsOfficeOfExport>${tag('referenceNumber', d.CustomsOfficeOfExport)}</CustomsOfficeOfExport><CustomsOfficeOfExitDeclared>${tag('referenceNumber', d.CustomsOfficeOfExitDeclared)}</CustomsOfficeOfExitDeclared><Exporter>${tag('identificationNumber', d.Exporter)}</Exporter><Declarant>${tag('identificationNumber', d.Declarant)}</Declarant><Representative>${tag('identificationNumber', d.Representative)}${tag('status', d.RepresentativeStatus)}</Representative><CurrencyExchange>${tag('internalCurrencyUnit', d.CurrencyExchange[0])}${tag('exchangeRate', d.CurrencyExchange[1])}</CurrencyExchange><GoodsShipment>${tag('natureOfTransaction', sh.natureOfTransaction)}${tag('countryOfExport', sh.countryOfExport)}${tag('countryOfDestination', sh.countryOfDestination)}` +
+    (sh.DeliveryTerms
+      ? `<DeliveryTerms>${tag('incotermCode', sh.DeliveryTerms.incotermCode)}${tag('location', sh.DeliveryTerms.location)}${tag('country', sh.DeliveryTerms.country)}</DeliveryTerms>`
+      : '') +
+    `<Consignment>${tag('containerIndicator', cx.containerIndicator)}${tag('inlandModeOfTransport', cx.inlandModeOfTransport)}${tag('modeOfTransportAtTheBorder', cx.modeOfTransportAtTheBorder)}${tag('grossMass', cx.grossMass)}` +
+    (cx.Carrier
+      ? `<Carrier>${tag('identificationNumber', cx.Carrier)}</Carrier>`
+      : '') +
+    (cx.Consignee
+      ? `<Consignee>${tag('name', cx.Consignee.name)}<Address>${tag('streetAndNumber', cx.Consignee.Address.streetAndNumber)}${tag('postcode', cx.Consignee.Address.postcode)}${tag('city', cx.Consignee.Address.city)}${tag('country', cx.Consignee.Address.country)}</Address></Consignee>`
+      : '') +
+    (cx.TransportDocument || [])
+      .map((r) => ref('TransportDocument', r))
+      .join('') +
+    `<TransportCharges>${tag('methodOfPayment', cx.TransportCharges)}</TransportCharges></Consignment>` +
+    (sh.GoodsItem || [])
+      .map(
+        (it: any) =>
+          `<GoodsItem>${tag('declarationGoodsItemNumber', it.declarationGoodsItemNumber)}${tag('statisticalValue', it.statisticalValue)}<Procedure>${tag('requestedProcedure', it.requestedProcedure)}${tag('previousProcedure', it.previousProcedure)}</Procedure><Origin>${tag('countryOfOrigin', it.countryOfOrigin)}</Origin><Commodity>${tag('descriptionOfGoods', it.Commodity.descriptionOfGoods)}<CommodityCode>${tag('harmonizedSystemSubHeadingCode', it.Commodity.CommodityCode.harmonizedSystemSubHeadingCode)}${tag('combinedNomenclatureCode', it.Commodity.CommodityCode.combinedNomenclatureCode)}</CommodityCode><GoodsMeasure>${tag('grossMass', it.Commodity.GoodsMeasure.grossMass)}${tag('netMass', it.Commodity.GoodsMeasure.netMass)}${it.Commodity.GoodsMeasure.supplementaryUnits != null ? tag('supplementaryUnits', it.Commodity.GoodsMeasure.supplementaryUnits) + (it.Commodity.GoodsMeasure.supplementaryUnitsCode ? tag('supplementaryUnitsCode', it.Commodity.GoodsMeasure.supplementaryUnitsCode) : '') : ''}</GoodsMeasure></Commodity><Packaging>${tag('sequenceNumber', it.Packaging.sequenceNumber)}${tag('typeOfPackages', it.Packaging.typeOfPackages)}${tag('numberOfPackages', it.Packaging.numberOfPackages)}${tag('shippingMarks', it.Packaging.shippingMarks)}</Packaging>${(it.SupportingDocument || []).map((r: any) => ref('SupportingDocument', r)).join('')}${(it.AdditionalReference || []).map((r: any) => ref('AdditionalReference', r)).join('')}</GoodsItem>`,
+      )
+      .join('') +
+    '</GoodsShipment></ie:BG515C>';
+  return `<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n\n${x}\n`;
+}
+export async function emitFile(d: ExDeclaration, file: string) {
+  await fs.writeFile(file, emitText(d), 'utf8');
+}

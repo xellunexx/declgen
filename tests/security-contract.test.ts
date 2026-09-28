@@ -14,9 +14,16 @@ test('Vite development server is strict on 5173', () => {
 
 test('package versions are pinned and infrastructure is checked', () => {
   const pkg = JSON.parse(read('package.json'));
-  for (const [name, version] of Object.entries({ ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) })) {
+  for (const [name, version] of Object.entries({
+    ...(pkg.dependencies || {}),
+    ...(pkg.devDependencies || {}),
+  })) {
     assert.equal(typeof version, 'string', name);
-    assert.doesNotMatch(String(version), /^(?:latest|next|\^|~|\*|>|<)/, `${name} is not exact: ${version}`);
+    assert.doesNotMatch(
+      String(version),
+      /^(?:latest|next|\^|~|\*|>|<)/,
+      `${name} is not exact: ${version}`,
+    );
   }
   const nodeConfig = read('tsconfig.node.json');
   assert.match(nodeConfig, /vite\.config\.ts/);

@@ -16,8 +16,20 @@ const DIST = path.join(ROOT, 'dist');
 const PORT = Number(process.env.DECLGEN_WEB_PORT || 48913);
 const HOST = process.env.DECLGEN_WEB_HOST || '127.0.0.1';
 
-const { DeclgenService } = await import(pathToFileURL(path.join(ROOT, 'dist-electron', 'electron', 'backend', 'declgen-service.js')).href);
-const { dataRoot } = await import(pathToFileURL(path.join(ROOT, 'dist-electron', 'core', 'paths.js')).href);
+const { DeclgenService } = await import(
+  pathToFileURL(
+    path.join(
+      ROOT,
+      'dist-electron',
+      'electron',
+      'backend',
+      'declgen-service.js',
+    ),
+  ).href
+);
+const { dataRoot } = await import(
+  pathToFileURL(path.join(ROOT, 'dist-electron', 'core', 'paths.js')).href
+);
 
 const service = new DeclgenService();
 await service.init();
@@ -26,63 +38,101 @@ await service.init();
 if (process.env.DECLGEN_AUTH !== 'off') service._owner = null;
 // Serialize swap+request so two accounts never interleave case state.
 let opChain = Promise.resolve();
-const queued = (fn) => { const r = opChain.then(fn); opChain = r.catch(() => {}); return r; };
+const queued = (fn) => {
+  const r = opChain.then(fn);
+  opChain = r.catch(() => {});
+  return r;
+};
 
 // Module: accounts gate (owns declgen-data/auth/*). Declgen_AUTH=off detaches it.
-const auth = await import(pathToFileURL(path.join(ROOT, 'web', 'auth.mjs')).href);
+const auth = await import(
+  pathToFileURL(path.join(ROOT, 'web', 'auth.mjs')).href
+);
 auth.initAuth(dataRoot());
 const AUTH_ENABLED = process.env.DECLGEN_AUTH !== 'off';
 
 // Module: case history (owns declgen-data/history/*).
-const history = await import(pathToFileURL(path.join(ROOT, 'web', 'history.mjs')).href);
+const history = await import(
+  pathToFileURL(path.join(ROOT, 'web', 'history.mjs')).href
+);
 history.initHistory(dataRoot());
 
 function cookies(req) {
   const out = {};
   for (const part of String(req.headers.cookie || '').split(';')) {
     const i = part.indexOf('=');
-    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    if (i > 0)
+      out[part.slice(0, i).trim()] = decodeURIComponent(
+        part.slice(i + 1).trim(),
+      );
   }
   return out;
 }
-const cookieFlags = (req) => `HttpOnly; SameSite=Lax; Path=/${isLocalRequest(req) ? '' : '; Secure'}`;
-const sessCookie = (req, token) => `declgen_sess=${token}; ${cookieFlags(req)}; Max-Age=2592000`;
+const cookieFlags = (req) =>
+  `HttpOnly; SameSite=Lax; Path=/${isLocalRequest(req) ? '' : '; Secure'}`;
+const sessCookie = (req, token) =>
+  `declgen_sess=${token}; ${cookieFlags(req)}; Max-Age=2592000`;
 const killCookie = (req) => `declgen_sess=; ${cookieFlags(req)}; Max-Age=0`;
 
 const AUTH_WINDOW_MS = 10 * 60 * 1000;
 const AUTH_MAX_ATTEMPTS = 10;
 const authAttempts = new Map();
 function clientKey(req) {
-  return String(req.headers['cf-connecting-ip'] || req.socket.remoteAddress || 'unknown');
+  return String(
+    req.headers['cf-connecting-ip'] || req.socket.remoteAddress || 'unknown',
+  );
 }
 function authRateLimited(req) {
-  const now = Date.now(), key = clientKey(req);
-  const recent = (authAttempts.get(key) || []).filter((t) => now - t < AUTH_WINDOW_MS);
+  const now = Date.now(),
+    key = clientKey(req);
+  const recent = (authAttempts.get(key) || []).filter(
+    (t) => now - t < AUTH_WINDOW_MS,
+  );
   recent.push(now);
   authAttempts.set(key, recent);
-  if (authAttempts.size > 10000) for (const [k, v] of authAttempts) if (!v.some((t) => now - t < AUTH_WINDOW_MS)) authAttempts.delete(k);
+  if (authAttempts.size > 10000)
+    for (const [k, v] of authAttempts)
+      if (!v.some((t) => now - t < AUTH_WINDOW_MS)) authAttempts.delete(k);
   return recent.length > AUTH_MAX_ATTEMPTS;
 }
 
 async function handleAuth(req, res, url) {
   if (url.pathname === '/__auth' && req.method === 'GET') {
     const data = await fs.readFile(path.join(ROOT, 'web', 'auth.html'));
-    return send(res, 200, data, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    return send(res, 200, data, {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store',
+    });
   }
-  if ((url.pathname === '/__auth/register' || url.pathname === '/__auth/login') && req.method === 'POST' && authRateLimited(req)) {
-    return json(res, 429, { ok: false, error: 'Твърде много опити. Опитайте отново след 10 минути.' });
+  if (
+    (url.pathname === '/__auth/register' || url.pathname === '/__auth/login') &&
+    req.method === 'POST' &&
+    authRateLimited(req)
+  ) {
+    return json(res, 429, {
+      ok: false,
+      error: 'Твърде много опити. Опитайте отново след 10 минути.',
+    });
   }
   if (url.pathname === '/__auth/register' && req.method === 'POST') {
     const b = await readBody(req);
     const r = await auth.registerAndLogin(b);
     if (r.ok) res.setHeader('set-cookie', sessCookie(req, r.token));
-    return json(res, r.ok ? 200 : 400, { ok: r.ok, error: r.error, user: r.user });
+    return json(res, r.ok ? 200 : 400, {
+      ok: r.ok,
+      error: r.error,
+      user: r.user,
+    });
   }
   if (url.pathname === '/__auth/login' && req.method === 'POST') {
     const b = await readBody(req);
     const r = await auth.login(b);
     if (r.ok) res.setHeader('set-cookie', sessCookie(req, r.token));
-    return json(res, r.ok ? 200 : 401, { ok: r.ok, error: r.error, user: r.user });
+    return json(res, r.ok ? 200 : 401, {
+      ok: r.ok,
+      error: r.error,
+      user: r.user,
+    });
   }
   if (url.pathname === '/__auth/logout' && req.method === 'POST') {
     await auth.logout(cookies(req).declgen_sess);
@@ -98,7 +148,11 @@ async function handleAuth(req, res, url) {
 
 const WAN_FILE = path.join(dataRoot(), 'wan.json');
 async function readWan() {
-  try { return JSON.parse(await fs.readFile(WAN_FILE, 'utf8')); } catch { return null; }
+  try {
+    return JSON.parse(await fs.readFile(WAN_FILE, 'utf8'));
+  } catch {
+    return null;
+  }
 }
 
 const TELEMETRY_DIR = path.join(dataRoot(), 'telemetry');
@@ -126,25 +180,40 @@ async function appendTelemetry(events) {
 }
 
 const MIME = {
-  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon',
-  '.woff': 'font/woff', '.woff2': 'font/woff2', '.map': 'application/json',
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.map': 'application/json',
 };
 
 function send(res, code, body, headers = {}) {
-  const buf = Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body));
+  const buf = Buffer.isBuffer(body)
+    ? body
+    : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body));
   res.writeHead(code, { 'content-length': buf.length, ...headers });
   res.end(buf);
 }
-const json = (res, code, obj) => send(res, code, obj, { 'content-type': 'application/json; charset=utf-8' });
+const json = (res, code, obj) =>
+  send(res, code, obj, { 'content-type': 'application/json; charset=utf-8' });
 
 // Same-machine requests only: loopback Host and no proxy/tunnel forwarding headers.
 // Native dialogs are restricted to these; a tunnel visitor uploads file bytes instead.
 function isLocalRequest(req) {
   const host = String(req.headers.host || '').toLowerCase();
   if (!/^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(host)) return false;
-  return !['cf-connecting-ip', 'cf-ray', 'x-forwarded-for', 'x-forwarded-host', 'forwarded'].some((h) => req.headers[h]);
+  return ![
+    'cf-connecting-ip',
+    'cf-ray',
+    'x-forwarded-for',
+    'x-forwarded-host',
+    'forwarded',
+  ].some((h) => req.headers[h]);
 }
 async function nativeAllowed(req) {
   return isLocalRequest(req);
@@ -154,64 +223,147 @@ async function nativeSelect(req, res, body) {
   if (!(await nativeAllowed(req))) {
     return json(res, 200, { ok: false, error: 'native-unavailable' });
   }
-  const mode = ['files', 'folder', 'profile'].includes(body?.mode) ? body.mode : 'files';
-  if (nativeDialogActive) return json(res, 200, { ok: false, error: 'Вече има отворен прозорец за избор.' });
+  const mode = ['files', 'folder', 'profile'].includes(body?.mode)
+    ? body.mode
+    : 'files';
+  if (nativeDialogActive)
+    return json(res, 200, {
+      ok: false,
+      error: 'Вече има отворен прозорец за избор.',
+    });
   nativeDialogActive = true;
-  const ps = spawn('powershell', ['-STA', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', path.join(ROOT, 'web', 'native-dialog.ps1'), '-Mode', mode], { stdio: ['ignore', 'pipe', 'pipe'] });
-  let out = '', err = '';
-  const killTimer = setTimeout(() => { try { ps.kill(); } catch {} }, 180000);
-  ps.stdout.on('data', (d) => { out += d.toString('utf8'); });
-  ps.stderr.on('data', (d) => { err += d.toString('utf8'); });
-  ps.on('error', (e) => { clearTimeout(killTimer); nativeDialogActive = false; json(res, 200, { ok: false, error: 'native-unavailable: ' + e.message }); });
+  const ps = spawn(
+    'powershell',
+    [
+      '-STA',
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-WindowStyle',
+      'Hidden',
+      '-File',
+      path.join(ROOT, 'web', 'native-dialog.ps1'),
+      '-Mode',
+      mode,
+    ],
+    { stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  let out = '',
+    err = '';
+  const killTimer = setTimeout(() => {
+    try {
+      ps.kill();
+    } catch {}
+  }, 180000);
+  ps.stdout.on('data', (d) => {
+    out += d.toString('utf8');
+  });
+  ps.stderr.on('data', (d) => {
+    err += d.toString('utf8');
+  });
+  ps.on('error', (e) => {
+    clearTimeout(killTimer);
+    nativeDialogActive = false;
+    json(res, 200, { ok: false, error: 'native-unavailable: ' + e.message });
+  });
   ps.on('close', (code) => {
-    clearTimeout(killTimer); nativeDialogActive = false;
-    if (code !== 0) return json(res, 200, { ok: false, error: 'native-unavailable: ' + (err.trim() || 'exit ' + code).slice(0, 200) });
-    const paths = out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    clearTimeout(killTimer);
+    nativeDialogActive = false;
+    if (code !== 0)
+      return json(res, 200, {
+        ok: false,
+        error:
+          'native-unavailable: ' + (err.trim() || 'exit ' + code).slice(0, 200),
+      });
+    const paths = out
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
     return json(res, 200, { ok: true, paths });
   });
 }
 
 const JSON_BODY_MAX_BYTES = 2 * 1024 * 1024;
 class HttpError extends Error {
-  constructor(status, message) { super(message); this.status = status; }
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
 }
 async function readBody(req) {
   const chunks = [];
   let size = 0;
   for await (const c of req) {
     size += c.length;
-    if (size > JSON_BODY_MAX_BYTES) throw new HttpError(413, 'Заявката е твърде голяма.');
+    if (size > JSON_BODY_MAX_BYTES)
+      throw new HttpError(413, 'Заявката е твърде голяма.');
     chunks.push(c);
   }
   if (!chunks.length) return {};
-  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return {}; }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    return {};
+  }
 }
 
 function safeUploadSegment(value) {
-  return String(value || 'local').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 96) || 'local';
+  return (
+    String(value || 'local')
+      .replace(/[^a-zA-Z0-9._-]/g, '_')
+      .slice(0, 96) || 'local'
+  );
 }
 
 function safeUploadName(value) {
-  const name = path.basename(String(value || 'document')).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim();
+  const name = path
+    .basename(String(value || 'document'))
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+    .trim();
   return name.slice(0, 180) || 'document';
 }
 
 async function receiveBrowserUpload(req, sessionUser) {
   const contentType = String(req.headers['content-type'] || '');
   const declaredBytes = Number(req.headers['content-length'] || 0);
-  if (!contentType.toLowerCase().startsWith('multipart/form-data;')) throw new Error('Очаква се избор на файл от браузъра.');
-  if (!Number.isFinite(declaredBytes) || declaredBytes <= 0 || declaredBytes > BROWSER_UPLOAD_MAX_REQUEST_BYTES) throw new Error('Качването е празно или надвишава лимита от 100 MB.');
+  if (!contentType.toLowerCase().startsWith('multipart/form-data;'))
+    throw new Error('Очаква се избор на файл от браузъра.');
+  if (
+    !Number.isFinite(declaredBytes) ||
+    declaredBytes <= 0 ||
+    declaredBytes > BROWSER_UPLOAD_MAX_REQUEST_BYTES
+  )
+    throw new Error('Качването е празно или надвишава лимита от 100 MB.');
 
-  const webRequest = new Request('http://declgen.local/api/dossier/browser-upload', {
-    method: 'POST', headers: req.headers, body: Readable.toWeb(req), duplex: 'half',
-  });
+  const webRequest = new Request(
+    'http://declgen.local/api/dossier/browser-upload',
+    {
+      method: 'POST',
+      headers: req.headers,
+      body: Readable.toWeb(req),
+      duplex: 'half',
+    },
+  );
   const form = await webRequest.formData();
-  const files = form.getAll('files').filter((value) => value && typeof value === 'object' && typeof value.arrayBuffer === 'function');
+  const files = form
+    .getAll('files')
+    .filter(
+      (value) =>
+        value &&
+        typeof value === 'object' &&
+        typeof value.arrayBuffer === 'function',
+    );
   if (!files.length) throw new Error('Не са избрани файлове.');
-  if (files.length > BROWSER_UPLOAD_MAX_FILES) throw new Error(`Изберете до ${BROWSER_UPLOAD_MAX_FILES} файла наведнъж.`);
+  if (files.length > BROWSER_UPLOAD_MAX_FILES)
+    throw new Error(`Изберете до ${BROWSER_UPLOAD_MAX_FILES} файла наведнъж.`);
 
   const userDir = safeUploadSegment(sessionUser?.user_id);
-  const uploadDir = path.join(dataRoot(), 'web-uploads', userDir, crypto.randomUUID());
+  const uploadDir = path.join(
+    dataRoot(),
+    'web-uploads',
+    userDir,
+    crypto.randomUUID(),
+  );
   const written = [];
   const usedNames = new Set();
   try {
@@ -219,12 +371,25 @@ async function receiveBrowserUpload(req, sessionUser) {
     for (const file of files) {
       const name = safeUploadName(file.name);
       const ext = path.extname(name).toLowerCase();
-      if (!BROWSER_UPLOAD_EXTENSIONS.has(ext)) throw new Error(`Неподдържан файл: ${name}. Разрешени са PDF, CSV, XML и XLSX.`);
-      if (!Number.isFinite(file.size) || file.size <= 0 || file.size > BROWSER_UPLOAD_MAX_FILE_BYTES) throw new Error(`Файлът ${name} е празен или надвишава 50 MB.`);
-      if (usedNames.has(name.toLowerCase())) throw new Error(`Има два файла със същото име: ${name}. Преименувайте единия и опитайте отново.`);
+      if (!BROWSER_UPLOAD_EXTENSIONS.has(ext))
+        throw new Error(
+          `Неподдържан файл: ${name}. Разрешени са PDF, CSV, XML и XLSX.`,
+        );
+      if (
+        !Number.isFinite(file.size) ||
+        file.size <= 0 ||
+        file.size > BROWSER_UPLOAD_MAX_FILE_BYTES
+      )
+        throw new Error(`Файлът ${name} е празен или надвишава 50 MB.`);
+      if (usedNames.has(name.toLowerCase()))
+        throw new Error(
+          `Има два файла със същото име: ${name}. Преименувайте единия и опитайте отново.`,
+        );
       usedNames.add(name.toLowerCase());
       const target = path.join(uploadDir, name);
-      await fs.writeFile(target, Buffer.from(await file.arrayBuffer()), { flag: 'wx' });
+      await fs.writeFile(target, Buffer.from(await file.arrayBuffer()), {
+        flag: 'wx',
+      });
       written.push(target);
     }
     return written;
@@ -239,58 +404,120 @@ async function handleApi(req, res, url, sessionUser) {
     const files = await receiveBrowserUpload(req, sessionUser);
     return json(res, 200, await service.uploadPaths(files));
   }
-  if (req.method === 'POST' && url.pathname === '/api/profile_import/browser-upload') {
+  if (
+    req.method === 'POST' &&
+    url.pathname === '/api/profile_import/browser-upload'
+  ) {
     const files = await receiveBrowserUpload(req, sessionUser);
-    if (files.length !== 1 || path.extname(files[0]).toLowerCase() !== '.xml') throw new Error('Изберете точно един XML файл.');
-    return json(res, 200, { ok: true, result: await service.profileInspect(files[0]) });
+    if (files.length !== 1 || path.extname(files[0]).toLowerCase() !== '.xml')
+      throw new Error('Изберете точно един XML файл.');
+    return json(res, 200, {
+      ok: true,
+      result: await service.profileInspect(files[0]),
+    });
   }
   const body = req.method === 'GET' ? {} : await readBody(req);
   const ep = url.pathname + url.search;
   try {
     // Endpoints that the Electron main process maps outside service.request():
-    if (req.method === 'POST' && url.pathname === '/api/profile_import/inspect') {
-      return json(res, 200, await service.profileInspect(String(body.path || '')));
+    if (
+      req.method === 'POST' &&
+      url.pathname === '/api/profile_import/inspect'
+    ) {
+      return json(
+        res,
+        200,
+        await service.profileInspect(String(body.path || '')),
+      );
     }
     if (req.method === 'POST' && url.pathname === '/api/dossier/upload') {
-      if (!(await nativeAllowed(req))) return json(res, 403, { ok: false, error: 'Отдалечените документи се качват през бутона „Избери файлове…“.' });
-      return json(res, 200, await service.uploadPaths(Array.isArray(body.paths) ? body.paths : []));
+      if (!(await nativeAllowed(req)))
+        return json(res, 403, {
+          ok: false,
+          error:
+            'Отдалечените документи се качват през бутона „Избери файлове…“.',
+        });
+      return json(
+        res,
+        200,
+        await service.uploadPaths(Array.isArray(body.paths) ? body.paths : []),
+      );
     }
     // History module endpoints — user-scoped, session comes from the gate (fallback 'local' when detached):
     const uid = sessionUser || { user_id: 'local', name: 'локален' };
     if (req.method === 'POST' && url.pathname === '/api/history/save') {
-      try { const snap = service.historySnapshot(uid); await history.saveSnapshot(snap); return json(res, 200, { ok: true, id: snap.id }); }
-      catch (e) { return json(res, 200, { ok: false, error: String(e instanceof Error ? e.message : e) }); }
+      try {
+        const snap = service.historySnapshot(uid);
+        await history.saveSnapshot(snap);
+        return json(res, 200, { ok: true, id: snap.id });
+      } catch (e) {
+        return json(res, 200, {
+          ok: false,
+          error: String(e instanceof Error ? e.message : e),
+        });
+      }
     }
     if (req.method === 'GET' && url.pathname === '/api/history') {
-      return json(res, 200, { ok: true, items: await history.listSnapshots(uid.user_id) });
+      return json(res, 200, {
+        ok: true,
+        items: await history.listSnapshots(uid.user_id),
+      });
     }
     if (req.method === 'GET' && url.pathname === '/api/history/item') {
-      const snap = await history.getSnapshot(String(url.searchParams.get('id') || ''), uid.user_id);
-      return json(res, 200, snap ? { ok: true, item: snap } : { ok: false, error: 'Няма такъв запис.' });
+      const snap = await history.getSnapshot(
+        String(url.searchParams.get('id') || ''),
+        uid.user_id,
+      );
+      return json(
+        res,
+        200,
+        snap
+          ? { ok: true, item: snap }
+          : { ok: false, error: 'Няма такъв запис.' },
+      );
     }
     if (req.method === 'POST' && url.pathname === '/api/wan/toggle') {
       const wan = await readWan();
-      return json(res, 200, wan?.url
-        ? { ok: true, wan_url: wan.url, wan_status: 'active' }
-        : { ok: false, error: 'Няма активен тунел (cloudflared не е стартиран).' });
+      return json(
+        res,
+        200,
+        wan?.url
+          ? { ok: true, wan_url: wan.url, wan_status: 'active' }
+          : {
+              ok: false,
+              error: 'Няма активен тунел (cloudflared не е стартиран).',
+            },
+      );
     }
     const result = await service.request(ep, req.method, body);
     if (url.pathname === '/api/state' && result && typeof result === 'object') {
       const wan = await readWan();
-      if (wan?.url) { result.wan_url = wan.url; result.wan_status = 'active'; result.wan_urls = { wan: wan.url }; }
+      if (wan?.url) {
+        result.wan_url = wan.url;
+        result.wan_status = 'active';
+        result.wan_urls = { wan: wan.url };
+      }
     }
     return json(res, 200, result);
   } catch (error) {
     if (error instanceof HttpError) throw error;
-    return json(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error) });
+    return json(res, 200, {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
 async function handleDownload(res, url) {
   try {
     let source = null;
-    if (url.pathname === '/__download/case_package') source = service.casePackage;
-    if (!source || !fsSync.existsSync(source)) return json(res, 404, { ok: false, error: 'Няма готов файл за изтегляне.' });
+    if (url.pathname === '/__download/case_package')
+      source = service.casePackage;
+    if (!source || !fsSync.existsSync(source))
+      return json(res, 404, {
+        ok: false,
+        error: 'Няма готов файл за изтегляне.',
+      });
     const name = url.searchParams.get('name') || path.basename(source);
     const data = await fs.readFile(source);
     return send(res, 200, data, {
@@ -306,15 +533,26 @@ async function handleStatic(res, url) {
   let p = decodeURIComponent(url.pathname);
   if (p === '/') p = '/index.html';
   const file = path.normalize(path.join(DIST, p));
-  if (file !== DIST && !file.startsWith(DIST + path.sep)) return json(res, 403, { ok: false, error: 'forbidden' });
+  if (file !== DIST && !file.startsWith(DIST + path.sep))
+    return json(res, 403, { ok: false, error: 'forbidden' });
   try {
     let data = await fs.readFile(file);
     const ext = path.extname(file).toLowerCase();
     if (ext === '.html') {
       // Inject the browser shim for window.desktop before any module script runs.
-      data = Buffer.from(data.toString('utf8').replace('</head>', '  <script src="/__shim.js"></script>\n  <script src="/__annotator.js"></script>\n  </head>'), 'utf8');
+      data = Buffer.from(
+        data
+          .toString('utf8')
+          .replace(
+            '</head>',
+            '  <script src="/__shim.js"></script>\n  <script src="/__annotator.js"></script>\n  </head>',
+          ),
+        'utf8',
+      );
     }
-    return send(res, 200, data, { 'content-type': MIME[ext] || 'application/octet-stream' });
+    return send(res, 200, data, {
+      'content-type': MIME[ext] || 'application/octet-stream',
+    });
   } catch {
     return json(res, 404, { ok: false, error: 'not found' });
   }
@@ -325,14 +563,23 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('x-request-id', reqId);
   const url = new URL(req.url || '/', `http://${HOST}:${PORT}`);
   try {
-    if (url.pathname === '/__health') return json(res, 200, { ok: true, ts: Date.now() });
-    if (url.pathname.startsWith('/__auth')) return await handleAuth(req, res, url);
+    if (url.pathname === '/__health')
+      return json(res, 200, { ok: true, ts: Date.now() });
+    if (url.pathname.startsWith('/__auth'))
+      return await handleAuth(req, res, url);
     // ---- accounts gate: everything below requires a session unless detached ----
     let sessionUser = null;
     if (AUTH_ENABLED) {
       sessionUser = await auth.resolveSession(cookies(req).declgen_sess);
       if (!sessionUser) {
-        if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/__native') || url.pathname.startsWith('/__download') || url.pathname.startsWith('/__telemetry') || url.pathname === '/__shim.js' || url.pathname === '/__annotator.js') {
+        if (
+          url.pathname.startsWith('/api/') ||
+          url.pathname.startsWith('/__native') ||
+          url.pathname.startsWith('/__download') ||
+          url.pathname.startsWith('/__telemetry') ||
+          url.pathname === '/__shim.js' ||
+          url.pathname === '/__annotator.js'
+        ) {
           return json(res, 401, { ok: false, error: 'Изисква се вход.' });
         }
         return send(res, 302, '', { location: '/__auth' });
@@ -342,49 +589,103 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/__telemetry' && req.method === 'POST') {
       const body = await readBody(req);
       const events = Array.isArray(body) ? body : [];
-      return json(res, 200, { ok: true, stored: await appendTelemetry(events.slice(0, 500)) });
+      return json(res, 200, {
+        ok: true,
+        stored: await appendTelemetry(events.slice(0, 500)),
+      });
     }
     if (url.pathname === '/__telemetry/tail') {
-      const n = Math.min(Math.max(Number(url.searchParams.get('n') || 100), 1), 2000);
+      const n = Math.min(
+        Math.max(Number(url.searchParams.get('n') || 100), 1),
+        2000,
+      );
       let lines = [];
-      try { lines = (await fs.readFile(TELEMETRY_FILE, 'utf8')).trim().split('\n').slice(-n); } catch {}
-      return json(res, 200, { ok: true, count: lines.length, events: lines.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean) });
+      try {
+        lines = (await fs.readFile(TELEMETRY_FILE, 'utf8'))
+          .trim()
+          .split('\n')
+          .slice(-n);
+      } catch {}
+      return json(res, 200, {
+        ok: true,
+        count: lines.length,
+        events: lines
+          .map((l) => {
+            try {
+              return JSON.parse(l);
+            } catch {
+              return null;
+            }
+          })
+          .filter(Boolean),
+      });
     }
     if (url.pathname === '/__shim.js') {
       const data = await fs.readFile(path.join(ROOT, 'web', 'shim.js'));
-      return send(res, 200, data, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
+      return send(res, 200, data, {
+        'content-type': 'text/javascript; charset=utf-8',
+        'cache-control': 'no-store',
+      });
     }
     if (url.pathname === '/__annotator.js') {
       const data = await fs.readFile(path.join(ROOT, 'web', 'annotator.js'));
-      return send(res, 200, data, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
+      return send(res, 200, data, {
+        'content-type': 'text/javascript; charset=utf-8',
+        'cache-control': 'no-store',
+      });
     }
     if (url.pathname === '/__telemetry/annotations') {
-      const n = Math.min(Math.max(Number(url.searchParams.get('n') || 50), 1), 500);
+      const n = Math.min(
+        Math.max(Number(url.searchParams.get('n') || 50), 1),
+        500,
+      );
       let events = [];
       for (const file of ['events.jsonl.1', 'events.jsonl']) {
         try {
-          const lines = (await fs.readFile(path.join(TELEMETRY_DIR, file), 'utf8')).trim().split('\n');
-          for (const l of lines) { try { const e = JSON.parse(l); if (e && e.type === 'annotation') events.push(e); } catch {} }
+          const lines = (
+            await fs.readFile(path.join(TELEMETRY_DIR, file), 'utf8')
+          )
+            .trim()
+            .split('\n');
+          for (const l of lines) {
+            try {
+              const e = JSON.parse(l);
+              if (e && e.type === 'annotation') events.push(e);
+            } catch {}
+          }
         } catch {}
       }
-      return json(res, 200, { ok: true, count: events.length, annotations: events.slice(-n) });
+      return json(res, 200, {
+        ok: true,
+        count: events.length,
+        annotations: events.slice(-n),
+      });
     }
     if (url.pathname === '/__native/select' && req.method === 'POST') {
       const body = await readBody(req);
       return await nativeSelect(req, res, body);
     }
-    const uidFor = AUTH_ENABLED ? sessionUser : { user_id: 'local', name: 'локален' };
+    const uidFor = AUTH_ENABLED
+      ? sessionUser
+      : { user_id: 'local', name: 'локален' };
     if (url.pathname.startsWith('/api/')) {
-      const boot = url.pathname === '/api/state' && url.searchParams.get('boot') === '1';
+      const boot =
+        url.pathname === '/api/state' && url.searchParams.get('boot') === '1';
       return await queued(async () => {
-        const sw = await service.switchUser(uidFor ? uidFor.user_id : 'local', boot);
+        const sw = await service.switchUser(
+          uidFor ? uidFor.user_id : 'local',
+          boot,
+        );
         if (!sw.ok) return json(res, 409, { ok: false, error: sw.error });
         return await handleApi(req, res, url, uidFor);
       });
     }
     if (url.pathname.startsWith('/__download/')) {
       return await queued(async () => {
-        const sw = await service.switchUser(uidFor ? uidFor.user_id : 'local', false);
+        const sw = await service.switchUser(
+          uidFor ? uidFor.user_id : 'local',
+          false,
+        );
         if (!sw.ok) return json(res, 409, { ok: false, error: sw.error });
         return await handleDownload(res, url);
       });
@@ -400,5 +701,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`declgen web surface: http://${HOST}:${PORT} (data: ${dataRoot()})`);
+  console.log(
+    `declgen web surface: http://${HOST}:${PORT} (data: ${dataRoot()})`,
+  );
 });

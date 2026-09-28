@@ -1,0 +1,12 @@
+node_modules/
+dist/
+dist-electron/
+declgen-data/
+package-lock.json
+*.zip
+*.rar
+*.ps1
+web/run/
+xml/
+.backup-*/
+electron-builder*.yml

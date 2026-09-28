@@ -1,11 +1,217 @@
-import fs from 'node:fs/promises'; import path from 'node:path'; import { clientsDir } from './paths.js';
-async function exists(p:string){try{await fs.access(p);return true}catch{return false}}
-export function capabilities(tpl:any){const s=new Set<string>(tpl?.capabilities||[]);if(tpl?.declarant_tin&&tpl?.importer_tin!==undefined)s.add('IM');if(tpl?.exporter_id&&tpl?.office_of_export)s.add('EX');return s;}
-export async function nextLrn(tpl:any,now=new Date(),directory=clientsDir()){const digits=(String(tpl?.representative?.tin||'').replace(/\D/g,'')+'00000000').slice(0,8),stateP=path.join(directory,`${tpl?.client_id||'default'}.state.json`);let state:any={};try{state=JSON.parse(await fs.readFile(stateP,'utf8'))}catch{}let serial=Number(state.lrn_serial||0)+1;const real=await exists(path.join(directory,`${tpl?.client_id||'default'}.json`));if(real){state.lrn_serial=serial;await fs.mkdir(directory,{recursive:true});await fs.writeFile(stateP,JSON.stringify(state),'utf8')}else serial=1;return `${String(now.getFullYear()).slice(-2)}${'0'.repeat(5)}${digits}H${String(serial).padStart(6,'0')}`;}
-const CLIENT_ID_RE=/^[A-Za-z0-9_-]+$/;
-export function assertClientId(clientId:string){if(!CLIENT_ID_RE.test(String(clientId||'')))throw new Error('invalid client_id');}
-export async function load(clientId:string,directory=clientsDir()){assertClientId(clientId);const p=path.join(directory,`${clientId}.json`);if(!await exists(p))throw new Error(`client template not found: ${clientId}`);const tpl=JSON.parse(await fs.readFile(p,'utf8'));tpl.goods_past=await scanPastGoods(clientId,directory);return tpl;}
-export async function listClients(directory=clientsDir()){try{return (await fs.readdir(directory)).filter(f=>f.endsWith('.json')&&!f.endsWith('.state.json')&&f!=='default.json').map(f=>path.basename(f,'.json')).sort()}catch{return[]}}
-export async function scanPastGoods(clientId:string,base=clientsDir()){const gdir=path.join(base,clientId,'goods'),out:any[]=[],seen=new Set<string>();let files:string[];try{files=(await fs.readdir(gdir)).filter(f=>f.toLowerCase().endsWith('.xml')).sort()}catch{return out}for(const f of files){try{const xml=await fs.readFile(path.join(gdir,f),'utf8');if(xml.includes('BG515C')){const {parseExportText}=await import('./bg515c.js');const d:any=parseExportText(xml);for(const it of d.GoodsShipment?.GoodsItem||[]){const cc=it.Commodity?.CommodityCode||{},code=String(cc.harmonizedSystemSubHeadingCode||'')+String(cc.combinedNomenclatureCode||''),name=String(it.Commodity?.descriptionOfGoods||'').split(' - ')[0].trim();if(code&&!seen.has(code)){seen.add(code);out.push({code,bg_name:name,origin:it.countryOfOrigin,source_file:f})}}}else{const {parseImportText}=await import('./xmlio.js');const d:any=parseImportText(xml);for(const it of d.GOODSSHIPMENT?.GOODITEM||[]){const cc=it.Commodity?.CommodityCode||{},code=String(cc.harmonizedSystemSubheadingCode||'')+String(cc.combinedNomenclatureCode||'')+String(cc.taricCode||''),name=String(it.Commodity?.descriptionOfGoods||'').split(' - ')[0].trim();if(code&&!seen.has(code)){seen.add(code);out.push({code,bg_name:name,origin:it.ORIGIN?.CountryOfOrigin,source_file:f})}}}}catch{}}return out.slice(0,80);}
-export async function saveTemplate(tpl:any,directory=clientsDir()){await fs.mkdir(directory,{recursive:true});const p=path.join(directory,`${tpl.client_id}.json`);await fs.writeFile(p,JSON.stringify(tpl,null,2),'utf8');return p;}
-export async function learnFromDeclaration(xmlPath:string,clientId:string,outDir=clientsDir()){const {parseImportFile}=await import('./xmlio.js');const d:any=await parseImportFile(xmlPath),sh=d.GOODSSHIPMENT,con=sh.CONSIGNMENT;let tpl:any={client_id:clientId,capabilities:['IM'],sender_code:d.SenderCode,recipient:d.Recipient,recipient_code:d.RecipientCode,representative:{tin:d.REPRESENTATIVE_TIN,status:d.REPRESENTATIVE_StatusCode},authorisation:d.Authorisation||null,declarant_tin:d.DECLARANT_TIN,importer_tin:sh.IMPORTER_TIN,lodging_office:d.LODGINGOFFICE_CustOfficeCode,defaults:{declaration_code:d.DECHEA.DeclarationCode,declaration_type:d.DECHEA.DeclarationType,add_declaration_type:d.DECHEA.AddDeclarationType,nature_of_transaction:sh.NatureOfTransaction,mode_of_trans_at_border:d.ModeOfTransAtBorder,nat_of_means:d.NatOfMeansOfTransCrosBorder,container_ind:con.ContainerInd,inland_mode:con.InlandModeOfTransport},location_of_goods:con.LocationOfGoods||null,declaration_profile:{declaration_code:d.DECHEA.DeclarationCode,declaration_type:d.DECHEA.DeclarationType,add_declaration_type:d.DECHEA.AddDeclarationType,lodging_office:d.LODGINGOFFICE_CustOfficeCode,nature_of_transaction:sh.NatureOfTransaction,border_transport:{nationality:d.NatOfMeansOfTransCrosBorder,mode:d.ModeOfTransAtBorder},inland_mode:con.InlandModeOfTransport,container_indicator:con.ContainerInd,location_of_goods:con.LocationOfGoods||undefined,destination_country:sh.DestinationCountryCode,delivery_terms:sh.DeliveryTerms||undefined},notes:[]};Object.keys(tpl.declaration_profile).forEach(k=>tpl.declaration_profile[k]==null&&delete tpl.declaration_profile[k]);await fs.mkdir(outDir,{recursive:true});const p=path.join(outDir,`${clientId}.json`);if(await exists(p)){const old=JSON.parse(await fs.readFile(p,'utf8'));tpl.capabilities=[...new Set([...(old.capabilities||[]),'IM'])].sort();if(old.declaration_profile)tpl.declaration_profile={...tpl.declaration_profile,...old.declaration_profile};for(const [k,v] of Object.entries(old))if(!(k in tpl)&&/^(exporter_id|office_of_|default_|authorisations|location_of_goods_ex)/.test(k))tpl[k]=v;}await fs.writeFile(p,JSON.stringify(tpl,null,2),'utf8');return tpl;}
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { clientsDir } from './paths.js';
+async function exists(p: string) {
+  try {
+    await fs.access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+export function capabilities(tpl: any) {
+  const s = new Set<string>(tpl?.capabilities || []);
+  if (tpl?.declarant_tin && tpl?.importer_tin !== undefined) s.add('IM');
+  if (tpl?.exporter_id && tpl?.office_of_export) s.add('EX');
+  return s;
+}
+export async function nextLrn(
+  tpl: any,
+  now = new Date(),
+  directory = clientsDir(),
+) {
+  const digits = (
+      String(tpl?.representative?.tin || '').replace(/\D/g, '') + '00000000'
+    ).slice(0, 8),
+    stateP = path.join(directory, `${tpl?.client_id || 'default'}.state.json`);
+  let state: any = {};
+  try {
+    state = JSON.parse(await fs.readFile(stateP, 'utf8'));
+  } catch {}
+  let serial = Number(state.lrn_serial || 0) + 1;
+  const real = await exists(
+    path.join(directory, `${tpl?.client_id || 'default'}.json`),
+  );
+  if (real) {
+    state.lrn_serial = serial;
+    await fs.mkdir(directory, { recursive: true });
+    await fs.writeFile(stateP, JSON.stringify(state), 'utf8');
+  } else serial = 1;
+  return `${String(now.getFullYear()).slice(-2)}${'0'.repeat(5)}${digits}H${String(serial).padStart(6, '0')}`;
+}
+const CLIENT_ID_RE = /^[A-Za-z0-9_-]+$/;
+export function assertClientId(clientId: string) {
+  if (!CLIENT_ID_RE.test(String(clientId || '')))
+    throw new Error('invalid client_id');
+}
+export async function load(clientId: string, directory = clientsDir()) {
+  assertClientId(clientId);
+  const p = path.join(directory, `${clientId}.json`);
+  if (!(await exists(p)))
+    throw new Error(`client template not found: ${clientId}`);
+  const tpl = JSON.parse(await fs.readFile(p, 'utf8'));
+  tpl.goods_past = await scanPastGoods(clientId, directory);
+  return tpl;
+}
+export async function listClients(directory = clientsDir()) {
+  try {
+    return (await fs.readdir(directory))
+      .filter(
+        (f) =>
+          f.endsWith('.json') &&
+          !f.endsWith('.state.json') &&
+          f !== 'default.json',
+      )
+      .map((f) => path.basename(f, '.json'))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+export async function scanPastGoods(clientId: string, base = clientsDir()) {
+  const gdir = path.join(base, clientId, 'goods'),
+    out: any[] = [],
+    seen = new Set<string>();
+  let files: string[];
+  try {
+    files = (await fs.readdir(gdir))
+      .filter((f) => f.toLowerCase().endsWith('.xml'))
+      .sort();
+  } catch {
+    return out;
+  }
+  for (const f of files) {
+    try {
+      const xml = await fs.readFile(path.join(gdir, f), 'utf8');
+      if (xml.includes('BG515C')) {
+        const { parseExportText } = await import('./bg515c.js');
+        const d: any = parseExportText(xml);
+        for (const it of d.GoodsShipment?.GoodsItem || []) {
+          const cc = it.Commodity?.CommodityCode || {},
+            code =
+              String(cc.harmonizedSystemSubHeadingCode || '') +
+              String(cc.combinedNomenclatureCode || ''),
+            name = String(it.Commodity?.descriptionOfGoods || '')
+              .split(' - ')[0]
+              .trim();
+          if (code && !seen.has(code)) {
+            seen.add(code);
+            out.push({
+              code,
+              bg_name: name,
+              origin: it.countryOfOrigin,
+              source_file: f,
+            });
+          }
+        }
+      } else {
+        const { parseImportText } = await import('./xmlio.js');
+        const d: any = parseImportText(xml);
+        for (const it of d.GOODSSHIPMENT?.GOODITEM || []) {
+          const cc = it.Commodity?.CommodityCode || {},
+            code =
+              String(cc.harmonizedSystemSubheadingCode || '') +
+              String(cc.combinedNomenclatureCode || '') +
+              String(cc.taricCode || ''),
+            name = String(it.Commodity?.descriptionOfGoods || '')
+              .split(' - ')[0]
+              .trim();
+          if (code && !seen.has(code)) {
+            seen.add(code);
+            out.push({
+              code,
+              bg_name: name,
+              origin: it.ORIGIN?.CountryOfOrigin,
+              source_file: f,
+            });
+          }
+        }
+      }
+    } catch {}
+  }
+  return out.slice(0, 80);
+}
+export async function saveTemplate(tpl: any, directory = clientsDir()) {
+  await fs.mkdir(directory, { recursive: true });
+  const p = path.join(directory, `${tpl.client_id}.json`);
+  await fs.writeFile(p, JSON.stringify(tpl, null, 2), 'utf8');
+  return p;
+}
+export async function learnFromDeclaration(
+  xmlPath: string,
+  clientId: string,
+  outDir = clientsDir(),
+) {
+  const { parseImportFile } = await import('./xmlio.js');
+  const d: any = await parseImportFile(xmlPath),
+    sh = d.GOODSSHIPMENT,
+    con = sh.CONSIGNMENT;
+  let tpl: any = {
+    client_id: clientId,
+    capabilities: ['IM'],
+    sender_code: d.SenderCode,
+    recipient: d.Recipient,
+    recipient_code: d.RecipientCode,
+    representative: {
+      tin: d.REPRESENTATIVE_TIN,
+      status: d.REPRESENTATIVE_StatusCode,
+    },
+    authorisation: d.Authorisation || null,
+    declarant_tin: d.DECLARANT_TIN,
+    importer_tin: sh.IMPORTER_TIN,
+    lodging_office: d.LODGINGOFFICE_CustOfficeCode,
+    defaults: {
+      declaration_code: d.DECHEA.DeclarationCode,
+      declaration_type: d.DECHEA.DeclarationType,
+      add_declaration_type: d.DECHEA.AddDeclarationType,
+      nature_of_transaction: sh.NatureOfTransaction,
+      mode_of_trans_at_border: d.ModeOfTransAtBorder,
+      nat_of_means: d.NatOfMeansOfTransCrosBorder,
+      container_ind: con.ContainerInd,
+      inland_mode: con.InlandModeOfTransport,
+    },
+    location_of_goods: con.LocationOfGoods || null,
+    declaration_profile: {
+      declaration_code: d.DECHEA.DeclarationCode,
+      declaration_type: d.DECHEA.DeclarationType,
+      add_declaration_type: d.DECHEA.AddDeclarationType,
+      lodging_office: d.LODGINGOFFICE_CustOfficeCode,
+      nature_of_transaction: sh.NatureOfTransaction,
+      border_transport: {
+        nationality: d.NatOfMeansOfTransCrosBorder,
+        mode: d.ModeOfTransAtBorder,
+      },
+      inland_mode: con.InlandModeOfTransport,
+      container_indicator: con.ContainerInd,
+      location_of_goods: con.LocationOfGoods || undefined,
+      destination_country: sh.DestinationCountryCode,
+      delivery_terms: sh.DeliveryTerms || undefined,
+    },
+    notes: [],
+  };
+  Object.keys(tpl.declaration_profile).forEach(
+    (k) =>
+      tpl.declaration_profile[k] == null && delete tpl.declaration_profile[k],
+  );
+  await fs.mkdir(outDir, { recursive: true });
+  const p = path.join(outDir, `${clientId}.json`);
+  if (await exists(p)) {
+    const old = JSON.parse(await fs.readFile(p, 'utf8'));
+    tpl.capabilities = [...new Set([...(old.capabilities || []), 'IM'])].sort();
+    if (old.declaration_profile)
+      tpl.declaration_profile = {
+        ...tpl.declaration_profile,
+        ...old.declaration_profile,
+      };
+    for (const [k, v] of Object.entries(old))
+      if (
+        !(k in tpl) &&
+        /^(exporter_id|office_of_|default_|authorisations|location_of_goods_ex)/.test(
+          k,
+        )
+      )
+        tpl[k] = v;
+  }
+  await fs.writeFile(p, JSON.stringify(tpl, null, 2), 'utf8');
+  return tpl;
+}

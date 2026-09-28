@@ -15,7 +15,7 @@ test('confirmed change after build makes output stale', () => {
   assert.deepEqual(c.readyBlockers(), []);
   c.bump('human H1 correction');
   assert.equal(c.stage, 'STALE');
-  assert.ok(c.readyBlockers().some(x => x.includes('ревизия')));
+  assert.ok(c.readyBlockers().some((x) => x.includes('ревизия')));
 });
 
 test('approval requires current built and validated revision', () => {
@@ -37,9 +37,11 @@ test('fingerprint proves post-build drift independently of revision counter', ()
   const built = fingerprint({ invoice: { total: 10 }, context: {} });
   c.markBuilt(built);
   assert.deepEqual(c.driftBlockers(built), []);
-  assert.ok(c.driftBlockers(fingerprint({ invoice: { total: 11 }, context: {} })).length > 0);
+  assert.ok(
+    c.driftBlockers(fingerprint({ invoice: { total: 11 }, context: {} }))
+      .length > 0,
+  );
 });
-
 
 test('exported case is frozen and cannot be revised or rebuilt', () => {
   const c = new CaseState();
@@ -51,7 +53,7 @@ test('exported case is frozen and cannot be revised or rebuilt', () => {
   c.markExported();
   assert.throws(() => c.bump('late invoice edit'), /замразен/);
   assert.throws(() => c.markBuilt(fingerprint({ x: 2 })), /замразен/);
-  assert.ok(c.readyBlockers().some(x => x.includes('замразен')));
+  assert.ok(c.readyBlockers().some((x) => x.includes('замразен')));
 });
 
 test('approval only occurs from READY, not merely matching revisions', () => {

@@ -83,12 +83,12 @@ npm run build          # web/server.mjs loads dist/ and dist-electron/
 node web/server.mjs    # http://127.0.0.1:48913
 ```
 
-| Variable | Default | Effect |
-| --- | --- | --- |
-| `DECLGEN_WEB_PORT` | `48913` | listen port |
-| `DECLGEN_WEB_HOST` | `127.0.0.1` | listen address |
-| `DECLGEN_AUTH` | on | `off` disables accounts; all browsers then share one case |
-| `DECLGEN_DATA_ROOT` | `./declgen-data` (relative to the working directory) | cases, runs, catalog, auth, history, telemetry |
+| Variable            | Default                                              | Effect                                                    |
+| ------------------- | ---------------------------------------------------- | --------------------------------------------------------- |
+| `DECLGEN_WEB_PORT`  | `48913`                                              | listen port                                               |
+| `DECLGEN_WEB_HOST`  | `127.0.0.1`                                          | listen address                                            |
+| `DECLGEN_AUTH`      | on                                                   | `off` disables accounts; all browsers then share one case |
+| `DECLGEN_DATA_ROOT` | `./declgen-data` (relative to the working directory) | cases, runs, catalog, auth, history, telemetry            |
 
 With accounts on, each account has its own active case (`active-case.<account>.json`) and requests are serialized so accounts never interleave case state. The client catalog, LLM configuration and telemetry are shared by all accounts.
 
