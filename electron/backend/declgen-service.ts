@@ -867,9 +867,13 @@ export class DeclgenService {
             type: 'N740',
             referenceNumber: String(this.waybill.waybill_number),
           });
-          if (baseExtras.arrival_transport == null)
+          const arrivalId = String(this.waybill.waybill_number);
+          if (
+            baseExtras.arrival_transport == null &&
+            arrivalId.length <= conformance.ALPHA_TEXT_LIMITS.arrivalMeans
+          )
             baseExtras.arrival_transport = {
-              IdeOfMeaOfTraAtArrival: String(this.waybill.waybill_number),
+              IdeOfMeaOfTraAtArrival: arrivalId,
               IdeOfMeaOfTraAtArrivalCode: '40',
             };
         }
@@ -1375,9 +1379,13 @@ export class DeclgenService {
           type: 'N740',
           referenceNumber: String(this.waybill.waybill_number),
         });
-        if (extras.arrival_transport == null)
+        const arrivalId = String(this.waybill.waybill_number);
+        if (
+          extras.arrival_transport == null &&
+          arrivalId.length <= conformance.ALPHA_TEXT_LIMITS.arrivalMeans
+        )
           extras.arrival_transport = {
-            IdeOfMeaOfTraAtArrival: String(this.waybill.waybill_number),
+            IdeOfMeaOfTraAtArrival: arrivalId,
             IdeOfMeaOfTraAtArrivalCode: '40',
           };
       }

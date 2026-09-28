@@ -319,6 +319,12 @@ export function check(d: Declaration, canonical?: any): Issue[] {
     consignment.ARRIVALTRANSPORTMEANS?.IdeOfMeaOfTraAtArrival,
     ALPHA_TEXT_LIMITS.arrivalMeans,
   );
+  if (!consignment.ARRIVALTRANSPORTMEANS?.IdeOfMeaOfTraAtArrival)
+    W(
+      'GOODSSHIPMENT.CONSIGNMENT.ARRIVALTRANSPORTMEANS.IdeOfMeaOfTraAtArrival',
+      'missing arrival means ID — въведете номера на МПС при пристигане (полет/борд. №) в H1 контекст',
+      '',
+    );
   alphaLength(
     'GOODSSHIPMENT.CONSIGNMENT.LocationOfGoods.typeOfLocation',
     location.typeOfLocation,
