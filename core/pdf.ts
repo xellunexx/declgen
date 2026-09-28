@@ -115,6 +115,24 @@ const numericCell = (t: string) => /^[$€£]?-?[\d.,'’]*\d$/.test(t.trim());
 // continuations, not rows.
 const isDataLine = (line: CellLine) =>
   line.cells.filter((c) => numericCell(c.t)).length >= 2;
+// Mirrors looksLikeBareCode in extract.ts: a token is descriptive when it is a
+// word >=4 chars with no digits and not an ALL-CAPS abbreviation. A cell whose
+// tokens are all non-descriptive is a bare code like '180mm' or 'pcs'.
+const bareCode = (t: string) =>
+  !t
+    .split(/[^0-9A-Za-zА-Яа-я]+/)
+    .some(
+      (w) =>
+        w.length >= 4 &&
+        !/\d/.test(w) &&
+        !(w.toUpperCase() === w && w.length <= 6),
+    );
+const UNIT_WORD = /^(pcs?|set|kg|bundles?|box|pallet|rolls?|cartons?)$/i;
+interface MCell {
+  t: string;
+  cont: boolean; // true when every merged part came from a continuation line
+  y: number; // source line of the last merged part
+}
 // Reassemble logical table rows: cells may wrap onto lines above and below the
 // data line (vertically centered cells). Between two data lines, earlier
 // continuation lines belong to the previous row's wrapped bottom, the last one
@@ -131,19 +149,24 @@ export function logicalRows(lines: CellLine[]): string[][] {
       if (colStarts[i] <= x0 + 2) c = i;
     return c;
   };
-  const rows: Map<number, string>[] = [];
+  const rows: Map<number, MCell>[] = [];
   let headerLines: CellLine[] = [],
     pending: CellLine[] = [],
-    last: Map<number, string> | null = null;
+    last: Map<number, MCell> | null = null;
   const mergeInto = (
-    row: Map<number, string>,
+    row: Map<number, MCell>,
     line: CellLine,
     first = false,
+    cont = false,
   ) => {
     for (const c of line.cells) {
       const k = colOf(c.x0),
-        cur = row.get(k) ?? '';
-      row.set(k, cell(first ? `${c.t} ${cur}` : `${cur} ${c.t}`));
+        cur = row.get(k);
+      row.set(k, {
+        t: cell(first ? `${c.t} ${cur?.t ?? ''}` : `${cur?.t ?? ''} ${c.t}`),
+        cont: cont && (cur?.cont ?? true),
+        y: line.y,
+      });
     }
   };
   for (const line of lines) {
@@ -151,7 +174,7 @@ export function logicalRows(lines: CellLine[]): string[][] {
       const rowCols = new Set(line.cells.map((c) => colOf(c.x0)));
       if (last && pending.length > 1) {
         // all but the last continuation line close the previous row
-        for (const pl of pending.slice(0, -1)) mergeInto(last, pl);
+        for (const pl of pending.slice(0, -1)) mergeInto(last, pl, false, true);
         pending = pending.slice(-1);
       } else if (!last && pending.length) {
         // Before the first data row, a pending line is a leading cell wrap only
@@ -165,27 +188,68 @@ export function logicalRows(lines: CellLine[]): string[][] {
           pending = [];
         }
       }
-      const row = new Map<number, string>();
-      for (const pl of pending) mergeInto(row, pl, true);
+      const row = new Map<number, MCell>();
+      for (const pl of pending) mergeInto(row, pl, true, true);
       mergeInto(row, line);
       rows.push(row);
       last = row;
       pending = [];
     } else pending.push(line);
   }
-  if (last) for (const pl of pending) mergeInto(last, pl);
+  if (last) for (const pl of pending) mergeInto(last, pl, false, true);
+  // Vertically-merged name cells are drawn once across a block of variant
+  // rows, so the lower rows' name region is empty and the model/size sits
+  // alone where the description should be. Refill such rows from the name
+  // cells of the contiguous block above. The block's text lines sit ~one line
+  // height apart; a larger y-gap means a different (unmerged) product's name.
+  const middles = rows.map((r) => {
+    const e = [...r.entries()].sort((a, b) => a[0] - b[0]);
+    const ni = e.findIndex(([, c]) => /^-?\d{1,3}$/.test(c.t));
+    const mid: [number, MCell][] = [];
+    for (const pair of ni < 0 ? e : e.slice(ni + 1)) {
+      if (numericCell(pair[1].t)) break;
+      mid.push(pair);
+    }
+    return mid;
+  });
+  for (let i = 0; i < rows.length; i++) {
+    const mid = middles[i];
+    if (
+      !mid.length ||
+      !mid.every(([, c]) => bareCode(c.t) || UNIT_WORD.test(c.t))
+    )
+      continue;
+    const parts: { col: number; t: string; y: number }[] = [];
+    let lastY = Infinity;
+    for (let j = i - 1; j >= 0; j--) {
+      if (!middles[j].some(([, c]) => bareCode(c.t))) break;
+      const names = middles[j].filter(
+        ([, c]) => !bareCode(c.t) && !UNIT_WORD.test(c.t),
+      );
+      if (!names.length || !names.every(([, c]) => c.cont)) break;
+      if (lastY !== Infinity && names[0][1].y - lastY > 20) break;
+      parts.unshift(...names.map(([col, c]) => ({ col, t: c.t, y: c.y })));
+      lastY = names[0][1].y;
+    }
+    if (parts.length)
+      rows[i].set(parts[0].col, {
+        t: cell(parts.map((p) => p.t).join(' ')),
+        cont: true,
+        y: parts[0].y,
+      });
+  }
   // Header: the contiguous run of text-only lines immediately above the first
   // data row (document-header prose has no numbers but sits further away).
   const ncol = Math.max(colStarts.length, ...rows.map((r) => r.size));
   const firstRowY = lines.find((l) => isDataLine(l))?.y ?? 0;
-  const header = new Map<number, string>();
+  const header = new Map<number, MCell>();
   for (const hl of headerLines) {
     if (hl.cells.some((c) => numericCell(c.t))) continue;
     if (Math.abs(firstRowY - hl.y) > 40) continue;
     mergeInto(header, hl);
   }
-  const fill = (m: Map<number, string>) =>
-    Array.from({ length: ncol }, (_, i) => m.get(i) ?? '');
+  const fill = (m: Map<number, MCell>) =>
+    Array.from({ length: ncol }, (_, i) => m.get(i)?.t ?? '');
   return [fill(header), ...rows.map(fill)];
 }
 export async function findTables(filePath: string) {
