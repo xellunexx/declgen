@@ -1,0 +1,67 @@
+{
+  "name": "declgen-complete",
+  "version": "1.0.1",
+  "private": true,
+  "type": "module",
+  "main": "dist-electron/electron/main.js",
+  "description": "Complete Electron + React + TypeScript migration of declgen",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "build:renderer": "vite build",
+    "build:node": "tsc -p tsconfig.node.json",
+    "build": "npm run typecheck && npm run build:node && npm run build:renderer",
+    "dev:renderer": "vite",
+    "dev": "npm run build:node && concurrently -k \"vite\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "start": "npm run build:node && electron .",
+    "test": "npm run build:node && node --test dist-electron/tests/*.test.js",
+    "ci": "npm ci && npm run typecheck && npm test && npm run build",
+    "dist": "npm run build && electron-builder --win nsis"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "0.1.80",
+    "archiver": "7.0.1",
+    "fast-xml-parser": "5.2.5",
+    "pdfjs-dist": "5.4.149",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "xlsx": "0.18.5"
+  },
+  "devDependencies": {
+    "@types/archiver": "7.0.0",
+    "@types/node": "24.3.0",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.7",
+    "@vitejs/plugin-react": "6.1.1",
+    "concurrently": "10.0.5",
+    "cross-env": "10.1.0",
+    "electron": "44.2.0",
+    "electron-builder": "26.15.3",
+    "typescript": "7.0.2",
+    "vite": "8.1.0",
+    "wait-on": "9.1.0"
+  },
+  "build": {
+    "appId": "bg.declgen.reviewstation",
+    "productName": "declgen",
+    "files": [
+      "dist/**/*",
+      "dist-electron/core/**/*",
+      "dist-electron/electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "packageManager": "npm@10.9.2",
+  "engines": {
+    "node": "22.16.x",
+    "npm": "10.9.x"
+  }
+}

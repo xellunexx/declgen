@@ -1,0 +1,3 @@
+# Intentionally minimal: isolates the quick tunnel from the machine-wide
+# ~/.cloudflared/config.yml (which pins ingress for an unrelated named tunnel).
+# The actual origin is supplied via the --url flag on the command line.
