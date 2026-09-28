@@ -763,7 +763,9 @@ export async function buildDeclaration(
         }
       : null,
     PreviousDocument: [
-      ...(ctx.previous_documents || extras.previous_documents || []),
+      ...((ctx.previous_documents?.length
+        ? ctx.previous_documents
+        : extras.previous_documents) || []),
     ],
   };
   const rep = {

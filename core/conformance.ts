@@ -362,7 +362,7 @@ export function check(d: Declaration, canonical?: any): Issue[] {
   )
     E(
       'GOODSSHIPMENT.PreviousDocument',
-      `${previousType} reference required by canonical Evelin profile`,
+      `${previousType} reference required by canonical Evelin profile — въведете MRN на предходната (износна) декларация в Параметри → „Предишен документ — референция“ (напр. 26BG005100699433U4 / 13)`,
     );
   return issues;
 }
