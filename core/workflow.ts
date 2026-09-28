@@ -135,16 +135,16 @@ export function reconcileInvoiceDeclaration(invoice: any, decl: any) {
         ),
       0,
     ),
-    // Service-charge rows (or an explicit shipping_cost field) are declared as
-    // AK valuation additions, not as goods — both sides of the comparison must
-    // exclude them or the freight amount reads as a missing-value diff.
+    // Service-charge rows (or an explicit shipping_cost field) are folded into
+    // the item prices by gross-weight share — TotalAmountInvoiced stays the
+    // full grand_total, matching the canonical presentation.
     embeddedCharge = chargeTotal || dec(invoice.shipping_cost),
     goodsExpected = dec(invoice.grand_total) - embeddedCharge;
   if (invoice.grand_total != null && invoice.grand_total !== '') {
-    const diff = rnd(dec(dh.TotalAmountInvoiced) - goodsExpected, 2);
+    const diff = rnd(dec(dh.TotalAmountInvoiced) - dec(invoice.grand_total), 2);
     rows.push([
       'Крайна сума',
-      money(goodsExpected),
+      money(invoice.grand_total),
       money(dh.TotalAmountInvoiced),
       diff.toFixed(2),
       Math.abs(diff) <= 0.01,
@@ -153,14 +153,21 @@ export function reconcileInvoiceDeclaration(invoice: any, decl: any) {
       errors.push(
         `Крайна сума: разлика ${diff.toFixed(2)} ${dh.InvoiceCurrency}.`,
       );
-    if (embeddedCharge > 0)
+    if (embeddedCharge > 0) {
+      const folded = rnd(dec(dh.TotalAmountInvoiced) - goodsExpected, 2),
+        fDiff = rnd(folded - embeddedCharge, 2);
       rows.push([
-        'Транспорт/такси (АК)',
+        'Транспорт/такси (в цените)',
         money(embeddedCharge),
-        money(embeddedCharge),
-        '0.00',
-        true,
+        money(folded),
+        fDiff.toFixed(2),
+        Math.abs(fDiff) <= 0.02,
       ]);
+      if (Math.abs(fDiff) > 0.02)
+        warnings.push(
+          `Транспорт/такси: разлика ${fDiff.toFixed(2)} при разпределение в цените.`,
+        );
+    }
   }
   const net = items.reduce(
       (a: number, i: any) => a + dec(i.Commodity.GOODSMEASURE.NetMassKg),

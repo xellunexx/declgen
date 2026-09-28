@@ -84,7 +84,7 @@ const catalog = new Catalog([
   },
 ]);
 
-test('package invariant: header packages live on first item only', async () => {
+test('package invariant: header packages distribute across items by gross share', async () => {
   const [d] = await buildDeclaration(invoice, template, catalog, {
     lrn: '26000000123456789H000001',
     total_packages: 7,
@@ -92,13 +92,15 @@ test('package invariant: header packages live on first item only', async () => {
     line_masses: { '1': 1, '2': 2 },
   });
   assert.equal(d.DECHEA.TotalPackages, '7');
-  assert.equal(d.GOODSSHIPMENT.GOODITEM[0].PACKAGING.NumberOfPackages, '7');
-  assert.equal(d.GOODSSHIPMENT.GOODITEM[1].PACKAGING.NumberOfPackages, '0');
-  const sum = d.GOODSSHIPMENT.GOODITEM.reduce(
-    (n, it) => n + Number(it.PACKAGING.NumberOfPackages),
-    0,
+  const pkgs = d.GOODSSHIPMENT.GOODITEM.map((it: any) =>
+    Number(it.PACKAGING.NumberOfPackages),
   );
-  assert.equal(sum, 7);
+  // 1:2 gross split → 2.33 / 4.67 shares → largest remainder → [2, 5].
+  assert.deepEqual(pkgs, [2, 5]);
+  assert.equal(
+    pkgs.reduce((a: number, b: number) => a + b, 0),
+    7,
+  );
 });
 
 test('packing line_masses reach declaration items', async () => {
@@ -220,7 +222,7 @@ test('wrapped desc-cell spillover collapses to the product name', async () => {
   assert.equal(desc.includes('Extract Extract'), false);
 });
 
-test('charge rows never become goods items; embedded freight funds AK', async () => {
+test('charge rows never become goods items; embedded freight folds into prices by weight', async () => {
   const inv = {
     ...invoice,
     total_goods_value: 30,
@@ -255,8 +257,9 @@ test('charge rows never become goods items; embedded freight funds AK', async ()
     report.warnings.some((w: string) => /служебни разходи/.test(w)),
     true,
   );
-  // goods items stay anchored to the goods value; the 1000 charge becomes the
-  // AK valuation addition inside statistical value instead of a fake item.
+  // The 1000 charge folds into the item prices by gross-weight share — the
+  // canonical presentation: Σ ItemPrice == TotalAmountInvoiced == grand_total,
+  // and no AK addition is emitted for embedded freight.
   const priceSum = d.GOODSSHIPMENT.GOODITEM.reduce(
     (a: number, it: any) => a + Number(it.Commodity.ItemPrice),
     0,
@@ -265,8 +268,16 @@ test('charge rows never become goods items; embedded freight funds AK', async ()
     (a: number, it: any) => a + Number(it.StatisticalValue),
     0,
   );
-  assert.ok(Math.abs(priceSum - 30) < 0.02);
+  assert.ok(Math.abs(priceSum - 1030) < 0.02);
   assert.ok(Math.abs(statSum - 1030) < 0.02);
+  assert.equal(d.DECHEA.TotalAmountInvoiced, '1030.00');
+  for (const it of d.GOODSSHIPMENT.GOODITEM)
+    assert.equal(
+      it.CUSTOMSVALUATION.AdditionsAndDeductions.some(
+        (a: any) => a.code === 'AK',
+      ),
+      false,
+    );
   // Reconciliation must not report the excluded charge as a missing total or
   // count the charge row among goods positions.
   const rec = reconcileInvoiceDeclaration(inv, d);

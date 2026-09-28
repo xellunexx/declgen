@@ -855,15 +855,24 @@ export class DeclgenService {
         pwarns = w;
       }
       if (this.waybill) {
-        if (this.waybill.gross_kg != null)
+        // Packing list is the authority for gross mass; the waybill's courier
+        // billing weight only fills the gap when no packing total exists.
+        if (this.waybill.gross_kg != null && baseExtras.total_gross_kg == null)
           baseExtras.total_gross_kg = String(this.waybill.gross_kg);
+        // Packages align with the waybill count.
         if (this.waybill.pieces != null)
           baseExtras.total_packages = String(this.waybill.pieces);
-        if (this.waybill.waybill_number)
+        if (this.waybill.waybill_number) {
           (baseExtras.transport_documents ??= []).push({
             type: 'N740',
             referenceNumber: String(this.waybill.waybill_number),
           });
+          if (baseExtras.arrival_transport == null)
+            baseExtras.arrival_transport = {
+              IdeOfMeaOfTraAtArrival: String(this.waybill.waybill_number),
+              IdeOfMeaOfTraAtArrivalCode: '40',
+            };
+        }
       }
       baseExtras.additional_refs = this.buildParams.spec_refs
         .filter((r: any) => r.code && r.reference)
@@ -894,8 +903,8 @@ export class DeclgenService {
           label: 'ТРАНСПОРТ',
           count: 1,
         });
-        if (e.invoice.grand_total && !baseExtras.valuation_freight_total)
-          baseExtras.valuation_freight_total = String(e.invoice.grand_total);
+        if (e.invoice.grand_total && !baseExtras.valuation_freight_external)
+          baseExtras.valuation_freight_external = String(e.invoice.grand_total);
       }
       const snap = this.canonicalSnapshot(baseExtras),
         fp = fingerprint(snap);
@@ -1357,15 +1366,21 @@ export class DeclgenService {
       Object.assign(extras, patch);
     }
     if (this.waybill) {
-      if (this.waybill.gross_kg != null)
+      if (this.waybill.gross_kg != null && extras.total_gross_kg == null)
         extras.total_gross_kg = String(this.waybill.gross_kg);
       if (this.waybill.pieces != null)
         extras.total_packages = String(this.waybill.pieces);
-      if (this.waybill.waybill_number)
+      if (this.waybill.waybill_number) {
         (extras.transport_documents ??= []).push({
           type: 'N740',
           referenceNumber: String(this.waybill.waybill_number),
         });
+        if (extras.arrival_transport == null)
+          extras.arrival_transport = {
+            IdeOfMeaOfTraAtArrival: String(this.waybill.waybill_number),
+            IdeOfMeaOfTraAtArrivalCode: '40',
+          };
+      }
     }
     extras.additional_refs = this.buildParams.spec_refs
       .filter((r: any) => r.code && r.reference)
@@ -1394,8 +1409,8 @@ export class DeclgenService {
         label: 'ТРАНСПОРТ',
         count: 1,
       });
-      if (e.invoice.grand_total && !extras.valuation_freight_total)
-        extras.valuation_freight_total = String(e.invoice.grand_total);
+      if (e.invoice.grand_total && !extras.valuation_freight_external)
+        extras.valuation_freight_external = String(e.invoice.grand_total);
     }
     const fp = fingerprint(this.canonicalSnapshot(extras)),
       drift = this.case.driftBlockers(fp),

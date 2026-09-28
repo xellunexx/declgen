@@ -122,9 +122,7 @@ function dynamicDescription(entry: any, lines: any[], netKg: number) {
   const sourceNet = allKg
     ? lines.reduce((sum: number, l: any) => sum + num(l.qty ?? l.quantity), 0)
     : netKg;
-  const net = f6(sourceNet)
-    .replace(/\.?0+$/, '')
-    .replace('.', ',');
+  const net = String(Number(sourceNet.toFixed(3))).replace('.', ',');
   // A doubled line is the product name printed in both invoice columns
   // ('Dandelion Root Extract Extract Dandelion Root Extract' = name + wrapped
   // desc cell). The name reappears as the trailing words — find the longest
@@ -356,22 +354,23 @@ export async function buildDeclaration(
   const groups = [...groupsMap.values()],
     goodsValue = num(invoice.total_goods_value),
     // Freight embedded in the invoice (a charge row or the shipping_cost
-    // field) is already inside grand_total — it must be stripped from the
-    // item-price anchor while it feeds the AK valuation addition.
+    // field) is folded into the item prices by gross-weight share — the
+    // canonical presentation: Σ ItemPrice == TotalAmountInvoiced ==
+    // grand_total, no AK row. extras.valuation_freight_total is the TOTAL
+    // freight to declare; only the part beyond what the invoice embeds is
+    // emitted as an AK valuation addition (external transport invoices).
     embeddedFreight = chargeTotal || num(invoice.shipping_cost),
-    declaredFreight = num(extras.valuation_freight_total) || embeddedFreight,
+    declaredFreight =
+      Math.max(0, num(extras.valuation_freight_total) - embeddedFreight) +
+      num(extras.valuation_freight_external),
     lineTotal = goods.reduce((a: number, l: any) => a + l.subtotal, 0),
     totalInvoice =
-      declaredFreight > 0 && goodsValue > 0
-        ? goodsValue
-        : Math.max(
-            num(invoice.grand_total ?? invoice.total_goods_value) -
-              embeddedFreight,
-            0,
-          ) || lineTotal;
-  if (Math.abs(totalInvoice - lineTotal) > 0.02)
+      num(invoice.grand_total) ||
+      (goodsValue > 0 ? goodsValue + embeddedFreight : 0) ||
+      lineTotal + embeddedFreight;
+  if (Math.abs(totalInvoice - lineTotal - embeddedFreight) > 0.02)
     warnings.push(
-      `Крайна сума ${f2(totalInvoice)} надвишава сбора на редовете ${f2(lineTotal)} с ${f2(Math.abs(totalInvoice - lineTotal))} (напр. транспорт/такси) — разликата е разпределена пропорционално по позициите`,
+      `Крайна сума ${f2(totalInvoice)} надвишава сбора на редовете ${f2(lineTotal + embeddedFreight)} с ${f2(Math.abs(totalInvoice - lineTotal - embeddedFreight))} (напр. транспорт/такси) — разликата е разпределена пропорционално по позициите`,
     );
   const masses = itemMasses(
     groups.map((g) => ({
@@ -394,9 +393,7 @@ export async function buildDeclaration(
       String(invoice.currency || '').toUpperCase() === 'EUR' ? 1 : 1,
     ),
   );
-  const addFreight = declaredFreight,
-    addInsurance = num(extras.valuation_insurance_total),
-    addTotal = addFreight + addInsurance,
+  const addInsurance = num(extras.valuation_insurance_total),
     totalBase =
       groups.reduce(
         (a, g) => a + g.lines.reduce((x: number, l: any) => x + l.subtotal, 0),
@@ -409,15 +406,16 @@ export async function buildDeclaration(
   // Exact-anchoring (money to the cent, mass at 6dp): force Σ ItemPrice == TotalAmountInvoiced and
   // Σ GrossMassKg == TotalGrossMassKg; the rounding remainder lands on the biggest line. Kills
   // conformance 'totals'/'totals.gross' penny-drift at the source instead of tolerating it.
+  const goodsAnchor = Math.max(0, totalInvoice - embeddedFreight);
   const priceCents = groups.map((g) => {
     const pr = g.lines.reduce((a: number, l: any) => a + l.subtotal, 0);
     return Math.round(
-      (pr + (totalInvoice - lineTotal) * (pr / (lineTotal || 1))) * 100,
+      (pr + (goodsAnchor - lineTotal) * (pr / (lineTotal || 1))) * 100,
     );
   });
   {
     const diffC =
-      Math.round(totalInvoice * 100) - priceCents.reduce((a, c) => a + c, 0);
+      Math.round(goodsAnchor * 100) - priceCents.reduce((a, c) => a + c, 0);
     if (diffC) {
       let k = 0;
       for (let i = 1; i < priceCents.length; i++)
@@ -454,17 +452,18 @@ export async function buildDeclaration(
         );
     }
   }
-  // Cent-anchor the per-item valuation additions so Σ AK == freight total and
-  // Σ BC == insurance total exactly (remainder lands on the largest item).
-  const netAll = (masses.nets || []).reduce(
-      (x: number, nn: number) => x + (Number(nn) || 0),
-      0,
+  // Embedded invoice freight folds into the item price by gross-weight share
+  // (canonical presentation: Σ ItemPrice == grand_total). Explicit freight
+  // beyond the embedded part is a separate AK addition. Both are cent-anchored;
+  // Σ BC anchors to the insurance total (remainder lands on the largest item).
+  const grossAll = grossUnits.reduce((a: number, u: number) => a + u, 0) || 1,
+    foldCents = groups.map((g, i) =>
+      Math.round(((embeddedFreight * grossUnits[i]) / grossAll) * 100),
     ),
     freightCents = groups.map((g, i) => {
-      const netW = Number(masses.nets[i]) || 0,
-        rawVal = g.lines.reduce((a: number, l: any) => a + l.subtotal, 0),
-        wShare = netAll > 0 ? netW / netAll : rawVal / totalBase;
-      return Math.round(addFreight * wShare * 100);
+      const rawVal = g.lines.reduce((a: number, l: any) => a + l.subtotal, 0),
+        wShare = grossAll > 0 ? grossUnits[i] / grossAll : rawVal / totalBase;
+      return Math.round(declaredFreight * wShare * 100);
     }),
     insCents = groups.map((g) =>
       Math.round(
@@ -475,7 +474,8 @@ export async function buildDeclaration(
       ),
     );
   for (const [cents, total] of [
-    [freightCents, addFreight],
+    [foldCents, embeddedFreight],
+    [freightCents, declaredFreight],
     [insCents, addInsurance],
   ] as const) {
     const diff = Math.round(total * 100) - cents.reduce((a, b) => a + b, 0);
@@ -485,11 +485,28 @@ export async function buildDeclaration(
       cents[k] += diff;
     }
   }
+  // Waybill/invoice package count is the truth — apportion it across items by
+  // gross-weight share (largest remainder) so Σ NumberOfPackages == header.
+  const pkgTotal = Math.max(0, Math.round(num(totalPackages))),
+    rawPkgShares = groups.map(
+      (g, i) => (pkgTotal * grossUnits[i]) / (grossAll || 1),
+    ),
+    itemPkgs = rawPkgShares.map((s) => Math.floor(s));
+  {
+    let rem = pkgTotal - itemPkgs.reduce((a: number, b: number) => a + b, 0);
+    for (const i of [...groups.keys()].sort(
+      (a, b) => rawPkgShares[b] - itemPkgs[b] - (rawPkgShares[a] - itemPkgs[a]),
+    )) {
+      if (rem <= 0) break;
+      itemPkgs[i] += 1;
+      rem -= 1;
+    }
+  }
   for (let i = 0; i < groups.length; i++) {
     const g = groups[i],
       entry = g.entry,
       priceRaw = g.lines.reduce((a: number, l: any) => a + l.subtotal, 0),
-      price = priceCents[i] / 100,
+      price = (priceCents[i] + foldCents[i]) / 100,
       freight = freightCents[i] / 100,
       insurance = insCents[i] / 100,
       stat = (price + freight + insurance) * exchange,
@@ -577,7 +594,7 @@ export async function buildDeclaration(
       ShippingMarks: String(
         extras.shipping_marks || defaults.shipping_marks || 'Колет',
       ).slice(0, ALPHA_TEXT_LIMITS.shippingMarks),
-      NumberOfPackages: i === 0 ? totalPackages : '0',
+      NumberOfPackages: String(itemPkgs[i]),
       TypeOfPackages: String(
         extras.package_type || defaults.package_type || 'CT',
       ),
@@ -705,16 +722,19 @@ export async function buildDeclaration(
       InlandModeOfTransport: String(
         ctx.inland_mode ?? defaults.inland_mode ?? '3',
       ).slice(0, ALPHA_TEXT_LIMITS.inlandMode),
-      ARRIVALTRANSPORTMEANS: ctx.arrival_transport
-        ? {
-            IdeOfMeaOfTraAtArrival: String(
-              ctx.arrival_transport.IdeOfMeaOfTraAtArrival || '',
-            ).slice(0, ALPHA_TEXT_LIMITS.arrivalMeans),
-            IdeOfMeaOfTraAtArrivalCode: String(
-              ctx.arrival_transport.IdeOfMeaOfTraAtArrivalCode || '',
-            ),
-          }
-        : null,
+      ARRIVALTRANSPORTMEANS: (() => {
+        const at = ctx.arrival_transport || extras.arrival_transport;
+        return at
+          ? {
+              IdeOfMeaOfTraAtArrival: String(
+                at.IdeOfMeaOfTraAtArrival || '',
+              ).slice(0, ALPHA_TEXT_LIMITS.arrivalMeans),
+              IdeOfMeaOfTraAtArrivalCode: String(
+                at.IdeOfMeaOfTraAtArrivalCode || '',
+              ),
+            }
+          : null;
+      })(),
       LocationOfGoods: loc
         ? {
             typeOfLocation: String(loc.typeOfLocation || 'D').slice(
@@ -787,7 +807,11 @@ export async function buildDeclaration(
     declaration_context: ctx,
     context_boundary: boundary,
     exchange_rate: exchange,
-    valuation: { freight_total: addFreight, insurance_total: addInsurance },
+    valuation: {
+      freight_total: declaredFreight,
+      freight_embedded_in_prices: embeddedFreight,
+      insurance_total: addInsurance,
+    },
   };
   return [d, rep];
 }

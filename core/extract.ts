@@ -1177,10 +1177,21 @@ export function extractWaybill(doc: any) {
       )?.replace(/\s+/g, '') || null,
     pieces =
       grab(text, /\b(\d+)\s*\n\s*Pieces/i) ||
-      grab(text, /Pieces\s*\n\s*(\d+)/i),
+      grab(text, /Pieces\s*\n\s*(\d+)/i) ||
+      // DHL express layout: piece count trails the 'KG L:… W:… H:… N' line,
+      // and each piece carries a JD… license-plate serial.
+      grab(
+        text,
+        /[0-9.]+\s*KG\s+L:[0-9.]+\s*W:[0-9.]+\s*H:[0-9.]+\s*(\d+)\b/i,
+      ) ||
+      (() => {
+        const serials = new Set(text.match(/\bJD\d{12,}\b/gi));
+        return serials.size ? String(serials.size) : null;
+      })(),
     gross =
       grab(text, /([0-9.]+)\s*KG\s*\/\s*Dimensions/i) ||
       grab(text, /Cust Decl Shpt Wgt.*?\n\s*([0-9.]+)\s*KG/is) ||
+      grab(text, /([0-9.]+)\s*KG\s+L:[0-9.]+\s*W:[0-9.]+/i) ||
       grab(text, /ACTWGT\s*:\s*([0-9.]+)\s*KG/i),
     value =
       grab(text, /Customs Value:\s*([0-9.,]+)\s*USD/i) ||
