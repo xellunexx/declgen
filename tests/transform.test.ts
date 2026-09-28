@@ -315,6 +315,17 @@ test('declaration_context previous_documents reach GOODSSHIPMENT', async () => {
       ],
     },
   });
+  const [d2] = await buildDeclaration(invoice, template, catalog, {
+    lrn: '26000000123456789H000001',
+    total_gross_kg: 3,
+    previous_documents: [
+      { type: 'N337', referenceNumber: '26BG005100699433U4 / 13' },
+    ],
+  });
+  assert.equal(
+    d2.GOODSSHIPMENT.PreviousDocument[0].referenceNumber,
+    '26BG005100699433U4 / 13',
+  );
   const prev = d.GOODSSHIPMENT.PreviousDocument;
   assert.equal(prev.length, 1);
   assert.equal(prev[0].type, 'N337');

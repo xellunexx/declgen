@@ -430,6 +430,8 @@ export interface BuildParams {
   bc: string;
   specAll: boolean;
   refs: SpecRef[];
+  prevDocType: string;
+  prevDocRef: string;
   autoIdent: boolean;
 }
 
@@ -450,7 +452,7 @@ export function DeclarationTab({
   onResetParams: () => void;
   onStateRefresh: () => Promise<unknown>;
 }) {
-  const { fxRate, ak, bc, specAll, refs } = params;
+  const { fxRate, ak, bc, specAll, refs, prevDocType, prevDocRef } = params;
   const [showContext, setShowContext] = useState(false);
   const goods = state.report?.goods_items || [];
   return (
@@ -517,6 +519,23 @@ export function DeclarationTab({
               />{' '}
               към всички HS кодове
             </label>
+          </Field>
+          <Field label="Предишен документ — вид">
+            <input
+              value={prevDocType}
+              onChange={(e) =>
+                onParamsChange({ ...params, prevDocType: e.target.value })
+              }
+            />
+          </Field>
+          <Field label="Предишен документ — референция (EX MRN / позиция)">
+            <input
+              value={prevDocRef}
+              placeholder="напр. 26BG005100699433U4 / 13"
+              onChange={(e) =>
+                onParamsChange({ ...params, prevDocRef: e.target.value })
+              }
+            />
           </Field>
         </div>
         <div className="subsection-head">
@@ -630,5 +649,7 @@ export function collectBuildPayload(params: BuildParams) {
     auto_ident: params.autoIdent,
     spec_all: params.specAll,
     spec_refs: params.refs,
+    prev_doc_type: params.prevDocType,
+    prev_doc_ref: params.prevDocRef,
   };
 }

@@ -105,6 +105,8 @@ export interface AppState {
   bc_valuation?: string | number;
   spec_all?: boolean;
   spec_refs?: SpecRef[];
+  prev_doc_type?: string;
+  prev_doc_ref?: string;
   general_submitted?: boolean;
   declaration_context?: Record<string, unknown>;
   wan_status?: string;

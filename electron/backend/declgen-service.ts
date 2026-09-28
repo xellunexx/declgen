@@ -144,6 +144,8 @@ export class DeclgenService {
     auto_ident: true,
     spec_all: true,
     spec_refs: [],
+    prev_doc_type: 'N337',
+    prev_doc_ref: '',
     case_lrn: '',
   };
   generalSubmitted: any = null;
@@ -407,6 +409,8 @@ export class DeclgenService {
       auto_ident: this.buildParams?.auto_ident ?? true,
       spec_all: true,
       spec_refs: [],
+      prev_doc_type: 'N337',
+      prev_doc_ref: '',
       case_lrn: '',
     };
     this.lastRunDir = this.casePackage = null;
@@ -798,6 +802,8 @@ export class DeclgenService {
         auto_ident: !!body?.auto_ident,
         spec_all: !!body?.spec_all,
         spec_refs: Array.isArray(body?.spec_refs) ? body.spec_refs : [],
+        prev_doc_type: String(body?.prev_doc_type || 'N337'),
+        prev_doc_ref: String(body?.prev_doc_ref || ''),
         case_lrn: String(this.buildParams?.case_lrn || ''),
       };
       if (!deepEqual(normalized, this.buildParams)) {
@@ -872,6 +878,13 @@ export class DeclgenService {
         baseExtras.valuation_freight_total = this.buildParams.ak_valuation;
       if (this.buildParams.bc_valuation)
         baseExtras.valuation_insurance_total = this.buildParams.bc_valuation;
+      if (this.buildParams.prev_doc_ref)
+        baseExtras.previous_documents = [
+          {
+            type: this.buildParams.prev_doc_type || 'N337',
+            referenceNumber: this.buildParams.prev_doc_ref,
+          },
+        ];
       for (const [name, e] of Object.entries(this.dossier) as any) {
         if (!e.invoice || name === this.invoiceName) continue;
         (baseExtras.dossier_docs ??= []).push({
@@ -1649,6 +1662,8 @@ export class DeclgenService {
       bc_valuation: this.buildParams.bc_valuation,
       spec_all: this.buildParams.spec_all,
       spec_refs: this.buildParams.spec_refs,
+      prev_doc_type: this.buildParams.prev_doc_type,
+      prev_doc_ref: this.buildParams.prev_doc_ref,
       general_submitted: !!this.generalSubmitted,
       declaration_context: this.declarationContext,
       case_state: this.case.toJSON(),
