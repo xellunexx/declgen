@@ -10,7 +10,8 @@ export default defineConfig({
     strictPort: true,
   },
   // keepNames: annotations (right-click → Input) show real component names instead of minified letters.
-  // (valid esbuild option, missing from vite's ESBuildOptions type)
-  esbuild: { keepNames: true } as never,
-  build: { outDir: 'dist' },
+  build: {
+    outDir: 'dist',
+    rolldownOptions: { output: { keepNames: true } },
+  },
 });
