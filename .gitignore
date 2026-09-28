@@ -21,23 +21,13 @@ web/run/*-err.txt
 web/run/current_url.txt
 web/run/last-announced-url.txt
 
-# runtime data (keep only test fixtures)
-declgen-data/*
-!declgen-data/clients/
-declgen-data/clients/*
-!declgen-data/clients/evelin29.json
-!declgen-data/evidence/
-declgen-data/evidence/*
-!declgen-data/evidence/evelin29/
-!declgen-data/catalog/
-declgen-data/catalog/*
-!declgen-data/catalog/clients/
-declgen-data/catalog/clients/*
-!declgen-data/catalog/clients/evelin29.json
-!declgen-data/catalog/clients/evelin29.canonical.json
+# runtime data — lives outside the repo by default (~/.declgen-data);
+# never commit it. Committed fixtures live under tests/fixtures/.
+declgen-data/
 
 # sample declaration data
 xml/
 
 # internal session notes
 SESSION_HANDOFF.md
+node_modules

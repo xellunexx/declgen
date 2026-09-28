@@ -1,0 +1,38 @@
+[
+  {
+    "key": "prod:methylcobalamin vitamin b12",
+    "bg_name": "Methylcobalamin (Vitamin B12)",
+    "hs": {
+      "hs6": "293626",
+      "cn": "00",
+      "taric": "00"
+    },
+    "origin": "CN",
+    "source": "human_verified",
+    "aliases": ["Methylcobalamin (Vitamin B12)"]
+  },
+  {
+    "key": "prod:copper bisglycinate",
+    "bg_name": "Copper Bisglycinate",
+    "hs": {
+      "hs6": "292249",
+      "cn": "99",
+      "taric": "90"
+    },
+    "origin": "CN",
+    "source": "human_verified",
+    "aliases": ["Copper Bisglycinate"]
+  },
+  {
+    "key": "prod:manganese citrate",
+    "bg_name": "Manganese Citrate",
+    "hs": {
+      "hs6": "291815",
+      "cn": "00",
+      "taric": "00"
+    },
+    "origin": "CN",
+    "source": "human_verified",
+    "aliases": ["Manganese Citrate"]
+  }
+]

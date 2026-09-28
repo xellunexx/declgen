@@ -108,7 +108,7 @@ export function check(d: Declaration, canonical?: any): Issue[] {
     E(
       'envelope.SenderCode',
       JSON.stringify(d.SenderCode),
-      'BGA131374246ZZZZ3 pattern',
+      'expected pattern BG<x><9 digits>ZZZZ<digit>',
     );
   if (!TIN_RE.test(d.DECLARANT_TIN || ''))
     E('DECLARANT.TIN', JSON.stringify(d.DECLARANT_TIN), 'BGCxxxxxxxxxZZZZx');

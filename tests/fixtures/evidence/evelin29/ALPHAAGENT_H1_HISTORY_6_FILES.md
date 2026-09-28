@@ -11,7 +11,7 @@ Six accepted AlphaAgent H1 declarations were analysed as evidence only:
 ## Findings promoted into the client profile
 
 - 137 goods-item observations, 63 distinct ten-digit HS codes, and 48 CAS values.
-- The same importer (`BGC113566227ZZZZ1`), China supplier family, and N337
+- The same importer (`BGC000000000ZZZZ0`), China supplier family, and N337
   previous-document convention recur across all six files.
 - 45 CAS-to-HS observations are unambiguous and are now a conformance guard.
   A generated description that contains one of those CAS values with another

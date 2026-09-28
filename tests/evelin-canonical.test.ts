@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import { emitText, parseImportText } from '../core/xmlio.js';
 import { check } from '../core/conformance.js';
 
-const base = 'declgen-data';
+const base = 'tests/fixtures';
 
 test('Evelin 1661 fixture is the enforceable import profile', async () => {
   const [xml, clientText, catalogText] = await Promise.all([

@@ -55,8 +55,10 @@ ok(r.j?.client_id === 'evelin29', 'A own in-flight work restored within 45-min c
 
 // 5b. Page (re)load with stale (2h-old) file => clean bench (no pollution).
 const fs = await import('node:fs');
-const me = JSON.parse(fs.readFileSync('declgen-data/auth/users.json', 'utf8')).find((u) => u.name === A);
-const f = `declgen-data/active-case.${me.id}.json`;
+const os = await import('node:os');
+const DATA = process.env.DECLGEN_DATA_ROOT || `${os.homedir()}/.declgen-data`;
+const me = JSON.parse(fs.readFileSync(`${DATA}/auth/users.json`, 'utf8')).find((u) => u.name === A);
+const f = `${DATA}/active-case.${me.id}.json`;
 const old = new Date(Date.now() - 2 * 3600 * 1000);
 fs.utimesSync(f, old, old);
 let rB = await call(A, 'GET', '/api/state?boot=1');

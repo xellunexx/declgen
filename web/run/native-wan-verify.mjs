@@ -6,7 +6,8 @@ import http from 'node:http';
 import fs from 'node:fs';
 
 const BASE = '127.0.0.1:48913';
-const wan = JSON.parse(fs.readFileSync('declgen-data/wan.json', 'utf8'));
+const DATA = process.env.DECLGEN_DATA_ROOT || `${(await import('node:os')).homedir()}/.declgen-data`;
+const wan = JSON.parse(fs.readFileSync(`${DATA}/wan.json`, 'utf8'));
 const TUNNEL_HOST = new URL(wan.url).host;
 
 const login = await fetch(`http://${BASE}/__auth/register`, {

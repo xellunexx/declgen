@@ -7,7 +7,7 @@ import { buildDeclaration } from '../core/transform.js';
 import { DeclgenService } from '../electron/backend/declgen-service.js';
 
 async function readyService() {
-  const root = 'declgen-data',
+  const root = 'tests/fixtures',
     client = JSON.parse(
       await fs.readFile(`${root}/clients/evelin29.json`, 'utf8'),
     );

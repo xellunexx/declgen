@@ -11,12 +11,12 @@ import { buildDeclaration } from '../core/transform.js';
 test('Evelin pipeline keeps Alpha lengths and current shipment descriptions', async () => {
   const state = await fs.mkdtemp(path.join(os.tmpdir(), 'declgen-lrn-'));
   const lrn = await nextLrn(
-    { client_id: 'fixture', representative: { tin: 'BGA131374246ZZZZ3' } },
+    { client_id: 'fixture', representative: { tin: 'BGA000000000ZZZZ0' } },
     new Date('2026-09-23'),
     state,
   );
   assert.equal(lrn.length, 22);
-  assert.match(lrn, /^260000013137424H000001$/);
+  assert.match(lrn, /^260000000000000H000001$/);
 
   const waybill = extractWaybill({
     text: 'WAYBILL 49 2943 1474\n47.0 KG / Dimensions(CM): L:1 W:1 H:1 3\nPiecesCust Decl Shpt Wgt',
@@ -30,7 +30,7 @@ test('Evelin pipeline keeps Alpha lengths and current shipment descriptions', as
     { number: '4929431474', pieces: 3, gross: 47 },
   );
 
-  const root = 'declgen-data',
+  const root = 'tests/fixtures',
     client = JSON.parse(
       await fs.readFile(`${root}/clients/evelin29.json`, 'utf8'),
     );
