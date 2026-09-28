@@ -1,0 +1,2 @@
+# Byte-exact AlphaAgent fixtures: never convert line endings.
+declgen-data/evidence/** -text
