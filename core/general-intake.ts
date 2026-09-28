@@ -36,7 +36,7 @@ export function clientIdFromEori(eori: unknown): string {
 }
 export function generatedLrn(now = new Date()): string {
   const yy = String(now.getFullYear()).slice(-2);
-  return `${yy}${'0'.repeat(15)}H000001`;
+  return `${yy}${'0'.repeat(13)}H000001`;
 }
 function country(v: unknown, fallback = 'CN'): string {
   const s = String(v ?? '')

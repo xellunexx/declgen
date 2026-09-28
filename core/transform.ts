@@ -6,6 +6,7 @@ import { newDeclaration, newGoodItem, party, address } from './model.js';
 import { Catalog } from './catalog.js';
 import { resolve as resolveContext } from './declaration-context.js';
 import { refInvoice, refProforma } from './box44.js';
+import { ALPHA_TEXT_LIMITS } from './conformance.js';
 const num = (v: any, d = 0) => {
   const s = String(v ?? '')
     .trim()
@@ -47,14 +48,23 @@ function mergeObj(a: any, b: any) {
   }
   return out;
 }
-function partyFromInvoice(p: any, canonicalName = '') {
+function partyFromInvoice(p: any, canonicalName = '', fieldMax: any = {}) {
   return party({
-    Name: String(canonicalName || p?.company || p?.name || ''),
+    Name: String(canonicalName || p?.company || p?.name || '').slice(
+      0,
+      Number(fieldMax.exporter_name) || ALPHA_TEXT_LIMITS.exporterName,
+    ),
     ADDRESS: address({
       City: String(p?.city || ''),
       Country: iso(p?.country, ''),
-      StreetAndNumber: String(p?.address || p?.street || ''),
-      Postcode: String(p?.postcode || p?.zip || ''),
+      StreetAndNumber: String(p?.address || p?.street || '').slice(
+        0,
+        Number(fieldMax.exporter_street) || ALPHA_TEXT_LIMITS.exporterStreet,
+      ),
+      Postcode: String(p?.postcode || p?.zip || '').slice(
+        0,
+        ALPHA_TEXT_LIMITS.exporterPostcode,
+      ),
     }),
   });
 }
@@ -347,18 +357,27 @@ export async function buildDeclaration(
     ),
   );
   {
-    const diffU =
+    let diffU =
       Math.round(Number(masses.totalGross) * 1e6) -
       grossUnits.reduce((a, c) => a + c, 0);
     if (diffU) {
-      let k = 0;
-      for (let i = 1; i < grossUnits.length; i++)
-        if (grossUnits[i] > grossUnits[k]) k = i;
-      if (
-        grossUnits[k] + diffU >=
-        Math.round((Number(masses.nets[k]) || 0) * 1e6)
-      )
-        grossUnits[k] += diffU;
+      // Distribute the rounding remainder across lines (largest first); a
+      // negative diff may need several lines since no line may dip below net.
+      const order = [...grossUnits.keys()].sort(
+        (a, b) => grossUnits[b] - grossUnits[a],
+      );
+      for (const i of order) {
+        if (!diffU) break;
+        const floor = Math.round((Number(masses.nets[i]) || 0) * 1e6),
+          delta =
+            diffU > 0 ? diffU : Math.max(diffU, floor - grossUnits[i]);
+        grossUnits[i] += delta;
+        diffU -= delta;
+      }
+      if (diffU)
+        warnings.push(
+          `бруто: позициите не могат да се изравнят с общото тегло (разлика ${(diffU / 1e6).toFixed(6)} kg) — проверете нето/бруто в Декларация`,
+        );
     }
   }
   for (let i = 0; i < groups.length; i++) {
@@ -447,7 +466,7 @@ export async function buildDeclaration(
     it.PACKAGING = {
       ShippingMarks: String(
         extras.shipping_marks || defaults.shipping_marks || 'Колет',
-      ),
+      ).slice(0, ALPHA_TEXT_LIMITS.shippingMarks),
       NumberOfPackages: i === 0 ? totalPackages : '0',
       TypeOfPackages: String(extras.package_type || 'CT'),
     };
@@ -455,7 +474,13 @@ export async function buildDeclaration(
     it.TransportDocument = structuredClone(docs.transport);
     it.AdditionalReference =
       (extras.additional_refs_scope || 'first') === 'all' || i === 0
-        ? structuredClone(extras.additional_refs || [])
+        ? structuredClone(extras.additional_refs || []).map((r: any) => ({
+            ...r,
+            referenceNumber: String(r?.referenceNumber ?? '').slice(
+              0,
+              ALPHA_TEXT_LIMITS.additionalReference,
+            ),
+          }))
         : [];
     it.ValuationIndicator = String(
       entry.valuation_indicator || extras.valuation_indicator || '0000',
@@ -512,7 +537,7 @@ export async function buildDeclaration(
       defaults.nat_of_means ??
       invoice?.seller?.country ??
       '',
-  );
+  ).slice(0, ALPHA_TEXT_LIMITS.borderNationality);
   d.ModeOfTransAtBorder = String(
     ctx.border_transport?.mode ?? defaults.mode_of_trans_at_border ?? '4',
   );
@@ -522,6 +547,7 @@ export async function buildDeclaration(
   d.EXPORTER = partyFromInvoice(
     invoice.seller,
     String(template?.canonical_h1?.exporter_name || ''),
+    template?.canonical_h1?.field_max || {},
   );
   d.LODGINGOFFICE_CustOfficeCode = String(
     ctx.lodging_office ?? template.lodging_office ?? '',
@@ -559,12 +585,12 @@ export async function buildDeclaration(
       ),
       InlandModeOfTransport: String(
         ctx.inland_mode ?? defaults.inland_mode ?? '3',
-      ),
+      ).slice(0, ALPHA_TEXT_LIMITS.inlandMode),
       ARRIVALTRANSPORTMEANS: ctx.arrival_transport
         ? {
             IdeOfMeaOfTraAtArrival: String(
               ctx.arrival_transport.IdeOfMeaOfTraAtArrival || '',
-            ),
+            ).slice(0, ALPHA_TEXT_LIMITS.arrivalMeans),
             IdeOfMeaOfTraAtArrivalCode: String(
               ctx.arrival_transport.IdeOfMeaOfTraAtArrivalCode || '',
             ),
@@ -572,11 +598,29 @@ export async function buildDeclaration(
         : null,
       LocationOfGoods: loc
         ? {
-            typeOfLocation: String(loc.typeOfLocation || 'D'),
+            typeOfLocation: String(loc.typeOfLocation || 'D').slice(
+              0,
+              ALPHA_TEXT_LIMITS.locationType,
+            ),
             qualifierOfIdentification: String(
               loc.qualifierOfIdentification || 'Z',
-            ),
-            ADDRESS: loc.ADDRESS ? address(loc.ADDRESS) : null,
+            ).slice(0, ALPHA_TEXT_LIMITS.locationQualifier),
+            ADDRESS: loc.ADDRESS
+              ? address({
+                  City: String(loc.ADDRESS.City || '').slice(
+                    0,
+                    ALPHA_TEXT_LIMITS.locationCity,
+                  ),
+                  Country: loc.ADDRESS.Country,
+                  StreetAndNumber: String(
+                    loc.ADDRESS.StreetAndNumber || '',
+                  ).slice(0, ALPHA_TEXT_LIMITS.locationStreet),
+                  Postcode: String(loc.ADDRESS.Postcode || '').slice(
+                    0,
+                    ALPHA_TEXT_LIMITS.locationPostcode,
+                  ),
+                })
+              : null,
           }
         : null,
     },

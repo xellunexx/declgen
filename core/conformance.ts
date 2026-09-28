@@ -48,7 +48,7 @@ const PACK_TYPES = new Set(['PC', 'CT', 'PK', 'PL', 'BG', 'BX', 'PA']);
 // Conservative BG415A limits proven by the two successful Alpha fixtures supplied
 // for DALMATIKA and NATVIE.  Keep these checks close to export so a draft cannot
 // reach Alpha Agent with a value that it will reject on import.
-const ALPHA_TEXT_LIMITS = {
+export const ALPHA_TEXT_LIMITS = {
   lrn: 22,
   borderNationality: 2,
   exporterName: 26,
