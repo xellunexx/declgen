@@ -96,3 +96,43 @@ test('wrapped cell lines merge into their logical row', () => {
     '7 | Air Hose | DN38 | pcs | 2 | $159.0 | 4016991090',
   );
 });
+
+// Packing lists emit package/pallet detail on separate y-lines with no item
+// number; those rows must fold into the preceding numbered product row so the
+// LLM sees one row per product with its weights.
+test('unnumbered package rows fold into the previous numbered row', () => {
+  const L = (y: number, cells: [number, string][]) => ({
+    y,
+    cells: cells.map(([x0, t]) => ({ x0, x1: x0 + t.length * 3, t })),
+  });
+  const lines = [
+    L(800, [
+      [50, '3'],
+      [90, 'Roller for air hose'],
+      [180, '0.8*0.5*1.2M'],
+      [280, '1'],
+      [300, 'PCS'],
+    ]),
+    L(780, [
+      [340, '1'],
+      [360, 'Pallet'],
+      [420, '1300*1280*1500'],
+      [520, '200'],
+      [560, '225'],
+    ]),
+    L(760, [
+      [50, '4'],
+      [90, 'Air Hose'],
+      [180, 'DN38 40m length'],
+      [280, '2'],
+      [300, 'PCS'],
+    ]),
+  ];
+  const grid = logicalRows(lines as any);
+  assert.equal(grid.length, 3);
+  const row3 = grid[1];
+  assert.ok(row3.join(' ').includes('Pallet'));
+  assert.ok(row3.join(' ').includes('200'));
+  const row4 = grid[2];
+  assert.ok(row4.join(' ').includes('DN38 40m length'));
+});

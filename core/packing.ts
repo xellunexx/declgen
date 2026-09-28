@@ -43,6 +43,15 @@ export function extractMasses(
       if (!invByNo.has(k)) invByNo.set(k, i);
     });
     // Strategy B: positional alignment by line number — deterministic when both docs number rows; survives count drift (e.g. PL has one extra/trailing row).
+    // The two documents may number rows independently (PL counts package detail
+    // rows), so a coincidental number match that pairs unrelated products must
+    // not assign a wrong weight — skip pairs whose descriptions share no token.
+    const tok = (s: any) =>
+      new Set(
+        norm(s)
+          .split(' ')
+          .filter((w) => w.length >= 3),
+      );
     const bCand = pl
       .map((p: any, pi: number) => [key(p), pi] as const)
       .filter(([k]: any) => invByNo.has(k));
@@ -50,7 +59,10 @@ export function extractMasses(
       for (const [k, pi] of bCand) {
         const i = invByNo.get(k)!;
         if (usedInv.has(i) || usedPl.has(pi)) continue;
-        const p = pl[pi];
+        const p = pl[pi],
+          a = tok(p.description),
+          b = tok(inv[i].description);
+        if (a.size && b.size && ![...a].some((w) => b.has(w))) continue;
         if (p.net_kg != null) masses[key(inv[i])] = p.net_kg;
         usedInv.add(i);
         usedPl.add(pi);

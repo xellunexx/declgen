@@ -197,6 +197,33 @@ export function logicalRows(lines: CellLine[]): string[][] {
     } else pending.push(line);
   }
   if (last) for (const pl of pending) mergeInto(last, pl, false, true);
+  // Package/pallet detail rows carry no item number — their S/N cell is empty
+  // and the boxes/size/weight cells belong to the preceding numbered row.
+  const snHits = new Map<number, number>();
+  for (const r of rows)
+    for (const [k, c] of r)
+      if (/^-?\d{1,3}$/.test(c.t)) snHits.set(k, (snHits.get(k) ?? 0) + 1);
+  const snCol = [...snHits.entries()].sort(
+    (a, b) => b[1] - a[1] || a[0] - b[0],
+  )[0]?.[0];
+  if (snCol != null && (snHits.get(snCol) ?? 0) >= rows.length / 2) {
+    const merged: Map<number, MCell>[] = [];
+    for (const r of rows) {
+      const prev = merged[merged.length - 1];
+      if (prev && !(r.get(snCol)?.t ?? '').trim())
+        for (const [k, c] of r) {
+          const cur = prev.get(k);
+          prev.set(k, {
+            t: cell(`${cur?.t ?? ''} ${c.t}`),
+            cont: cur ? cur.cont && c.cont : c.cont,
+            y: c.y,
+          });
+        }
+      else merged.push(r);
+    }
+    rows.length = 0;
+    rows.push(...merged);
+  }
   // Vertically-merged name cells are drawn once across a block of variant
   // rows, so the lower rows' name region is empty and the model/size sits
   // alone where the description should be. Refill such rows from the name

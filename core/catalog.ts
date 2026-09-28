@@ -298,6 +298,17 @@ export class Catalog {
     const name = norm(cleanJoined(cleanDoc(description))),
       hs6 = String(hsCode || '').slice(0, 6),
       rank = SOURCE_RANK;
+    // A bare model/size code ('180mm', 'PCS') has no descriptive token, so
+    // substring/fuzzy hits against other products' aliases are meaningless —
+    // only an exact alias may match (mirrors looksLikeBareCode in extract.ts).
+    const fuzzyOk = name
+      .split(' ')
+      .some(
+        (w) =>
+          w.length >= 4 &&
+          !/\d/.test(w) &&
+          !(w.toUpperCase() === w && w.length <= 6),
+      );
     let best: any = null,
       bestScore = 0,
       bestRank = -1;
@@ -319,7 +330,7 @@ export class Catalog {
         )
           score = 1;
         const na = norm(a);
-        if (!na || !name) continue;
+        if (!na || !name || !fuzzyOk) continue;
         if (na === name) score = 1;
         else if (na.includes(name) || name.includes(na))
           score = Math.max(score, 0.92);
