@@ -336,6 +336,9 @@ export default function App() {
             paramsStale={buildParamsStale}
             onParamsChange={changeBuildParams}
             onResetParams={resetBuildParams}
+            onParamsBaseSync={(caseId, revision) => {
+              buildDraftBase.current = { caseId, revision };
+            }}
             onStateRefresh={d.refreshState}
           />
         );

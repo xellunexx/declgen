@@ -442,6 +442,7 @@ export function DeclarationTab({
   paramsStale,
   onParamsChange,
   onResetParams,
+  onParamsBaseSync,
   onStateRefresh,
 }: {
   state: AppState;
@@ -450,6 +451,7 @@ export function DeclarationTab({
   paramsStale: boolean;
   onParamsChange: (params: BuildParams) => void;
   onResetParams: () => void;
+  onParamsBaseSync?: (caseId: string, revision: number) => void;
   onStateRefresh: () => Promise<unknown>;
 }) {
   const { fxRate, ak, bc, specAll, refs, prevDocType, prevDocRef } = params;
@@ -493,7 +495,43 @@ export function DeclarationTab({
         return window.alert(
           res.error || 'Грешка при запис на предишен документ.',
         );
-      await onStateRefresh();
+      const fresh = (await onStateRefresh()) as AppState | undefined;
+      onParamsBaseSync?.(
+        String(fresh?.case_id || state.case_id || ''),
+        Number(fresh?.case_revision ?? 0),
+      );
+    } finally {
+      setSavingPrevDoc(false);
+    }
+  }
+  async function clearPrevDoc() {
+    if (!docType || !savedDocRef) return;
+    if (!window.confirm(`Изчистване на записания ${docType} от случая?`))
+      return;
+    const next = structuredClone(
+      (state.declaration_context || {}) as Record<string, unknown>,
+    );
+    const docs = ((next.previous_documents as DocRow[]) || []).filter(
+      (d) => String(d?.type || '').toUpperCase() !== docType,
+    );
+    if (docs.length) next.previous_documents = docs;
+    else delete next.previous_documents;
+    setSavingPrevDoc(true);
+    try {
+      const res = await declgenApi.saveH1Context(
+        next,
+        String(state.case_id || ''),
+        Number(state.case_revision || 0),
+      );
+      if (res.ok === false)
+        return window.alert(
+          res.error || 'Грешка при изчистване на предишен документ.',
+        );
+      const fresh = (await onStateRefresh()) as AppState | undefined;
+      onParamsBaseSync?.(
+        String(fresh?.case_id || state.case_id || ''),
+        Number(fresh?.case_revision ?? 0),
+      );
     } finally {
       setSavingPrevDoc(false);
     }
@@ -600,6 +638,18 @@ export function DeclarationTab({
                     ? 'Потвърдено'
                     : 'Потвърди'}
               </Button>
+              {savedDocRef && (
+                <Button
+                  kind="ghost"
+                  disabled={savingPrevDoc}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    void clearPrevDoc();
+                  }}
+                >
+                  Изчисти
+                </Button>
+              )}
               {savedDocRef ? (
                 <Badge tone={refConfirmed ? 'success' : 'warning'}>
                   {refConfirmed

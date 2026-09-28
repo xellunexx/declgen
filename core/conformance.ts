@@ -354,16 +354,25 @@ export function check(d: Declaration, canonical?: any): Issue[] {
   const previousType = String(
     canonical?.canonical_h1?.required_previous_document_type || '',
   );
-  if (
-    previousType &&
-    !sh.PreviousDocument.some(
+  if (previousType) {
+    const prevRef = sh.PreviousDocument.find(
       (r) => r.type === previousType && String(r.referenceNumber || '').trim(),
-    )
-  )
-    E(
-      'GOODSSHIPMENT.PreviousDocument',
-      `${previousType} reference required by canonical Evelin profile — въведете MRN на предходната (износна) декларация в Параметри → „Предишен документ — референция“ (напр. 26BG005100699433U4 / 13)`,
     );
+    if (!prevRef)
+      E(
+        'GOODSSHIPMENT.PreviousDocument',
+        `${previousType} reference required by canonical Evelin profile — въведете MRN на цесията (декларация за временно складиране) в Параметри → „Предишен документ — референция“ (напр. 26BG005100713106U0 / 14)`,
+      );
+    else if (
+      !/^\d{2}[A-Z]{2}[0-9A-Z]{6,}(\s*\/\s*\d+)?$/.test(
+        String(prevRef.referenceNumber).trim(),
+      )
+    )
+      W(
+        'GOODSSHIPMENT.PreviousDocument',
+        `${previousType} reference "${String(prevRef.referenceNumber).trim()}" does not look like a customs MRN (напр. 26BG005100713106U0 / 14) — проверете цесията`,
+      );
+  }
   return issues;
 }
 export const summarize = (issues: Issue[]) => ({
