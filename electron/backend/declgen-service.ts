@@ -1378,6 +1378,13 @@ export class DeclgenService {
       extras.valuation_freight_total = this.buildParams.ak_valuation;
     if (this.buildParams.bc_valuation)
       extras.valuation_insurance_total = this.buildParams.bc_valuation;
+    if (this.buildParams.prev_doc_ref)
+      extras.previous_documents = [
+        {
+          type: this.buildParams.prev_doc_type || 'N337',
+          referenceNumber: this.buildParams.prev_doc_ref,
+        },
+      ];
     for (const [name, e] of Object.entries(this.dossier) as any) {
       if (!e.invoice || name === this.invoiceName) continue;
       (extras.dossier_docs ??= []).push({

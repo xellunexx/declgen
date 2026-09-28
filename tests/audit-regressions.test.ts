@@ -130,6 +130,14 @@ test('APPROVED/EXPORTED case freezes mutating endpoints', async () => {
   );
 });
 
+test('approve-path extras mirror build extras for previous_documents (drift parity)', () => {
+  const service = read('electron/backend/declgen-service.ts');
+  const approveBody = service.slice(service.indexOf('async approve('));
+  assert.ok(approveBody.includes('extras.previous_documents'));
+  assert.ok(approveBody.includes('prev_doc_type'));
+  assert.ok(approveBody.includes('prev_doc_ref'));
+});
+
 test('readiness is false while a READY case still has review blockers', () => {
   const svc = new DeclgenService();
   svc.case = new CaseState({
