@@ -95,8 +95,6 @@ The approved snapshot is built from a separate frozen state copy, so a failed fi
 
 ## Remaining qualification work
 
-- Generate and commit `package-lock.json` on a networked workstation; the generation environment could not reach npm reliably.
-- Run dependency-aware `npm run typecheck`, `npm test`, `npm run build` after `npm ci`.
 - Launch Electron on Windows and exercise native dialogs, local LLM process control and Alpha export.
 - Run real UI accessibility/UX walkthroughs (keyboard, zoom, table overflow, screen-reader labels).
 - Compare reconstructed import/export transforms against a representative set of known-good declarations and expected XML.

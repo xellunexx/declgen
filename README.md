@@ -18,9 +18,11 @@ Windows filesystem + Alpha export
 
 There is no normal-runtime dependency on a Python HTTP server.
 
+A second runtime, `web/server.mjs`, serves the same `DeclgenService` and React build over HTTP for browser access (including remote access through a Cloudflare quick tunnel started by `web/run/watchdog.ps1` / `watchdog.sh`). It does not have the Electron security boundary described below; see [Web runtime](#web-runtime).
+
 ## State model
 
-The implementation follows `DECLGEN_STATE_FLOW_PROMPT.md`:
+The implementation follows the canonical state-flow contract (the original `DECLGEN_STATE_FLOW_PROMPT.md` is not included in this repository):
 
 - UI components own drafts, never authoritative customs state.
 - Confirmed edits write one canonical owner and require `case_id + base_revision`.
@@ -60,23 +62,7 @@ npm  10.9.x   (packageManager / engines)
 Vite dev port 5173, strictPort=true
 ```
 
-### Lockfile status
-
-`package-lock.json` is **not present in this generated artifact**. The execution environment could not reach/resolve the npm registry long enough to generate it (`npm install --package-lock-only` timed out, and the required packages were not available in the local npm cache).
-
-Do not call dependency resolution fully reproducible until a lockfile is generated on a networked workstation and committed:
-
-```bash
-nvm use
-npm install --package-lock-only --ignore-scripts
-# review package-lock.json, commit it
-npm ci
-npm run typecheck
-npm test
-npm run build
-```
-
-After the lockfile exists, automated builds should use `npm ci`, not `npm install`.
+`package-lock.json` is committed; use `npm ci` for reproducible installs.
 
 ## Commands
 
@@ -90,13 +76,29 @@ npm run dist       # Windows NSIS package
 npm run ci         # npm ci + checks/tests/build; requires committed lockfile
 ```
 
-## Verification performed in the generation environment
+## Web runtime
 
-Because npm dependencies could not be installed here, a full dependency-aware `tsc`, Vite build, Electron launch and NSIS package could not be completed. The checks that *were* executed are:
+```bash
+npm run build          # web/server.mjs loads dist/ and dist-electron/
+node web/server.mjs    # http://127.0.0.1:48913
+```
 
-- all project `.ts/.tsx` source files syntax-transpiled with the available TypeScript compiler;
-- `electron/preload.cjs` checked with `node --check`;
-- dependency-free core/state/transform and source-contract regression tests executed with Node.
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `DECLGEN_WEB_PORT` | `48913` | listen port |
+| `DECLGEN_WEB_HOST` | `127.0.0.1` | listen address |
+| `DECLGEN_AUTH` | on | `off` disables accounts; all browsers then share one case |
+| `DECLGEN_DATA_ROOT` | `./declgen-data` (relative to the working directory) | cases, runs, catalog, auth, history, telemetry |
+
+With accounts on, each account has its own active case (`active-case.<account>.json`) and requests are serialized so accounts never interleave case state. The client catalog, LLM configuration and telemetry are shared by all accounts.
+
+File and folder pickers on the web surface open native dialogs only for same-machine requests; remote browsers upload file bytes instead.
+
+## Machine-specific paths
+
+- Alpha export destination: `C:\alpha\exports` on Windows, `<data root>/alpha-exports` elsewhere.
+- Local LLM starters: `C:\ai\start-local-ai.vbs` (text) and `C:\ai\start-qwen3vl-fixed.vbs` (vision); default text endpoint `http://127.0.0.1:10000/v1/chat/completions`.
+- Cloudflare tunnel binary (watchdog): `C:\Program Files (x86)\cloudflared\cloudflared.exe`.
 
 See `AUDIT_FIXES.md` for the exact audit finding status and `MIGRATION.md` for source/reconstruction provenance.
 

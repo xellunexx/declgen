@@ -1,6 +1,7 @@
 // declgen standalone web server — wraps the embedded DeclgenService over HTTP.
-// Binds 127.0.0.1 only. The Electron app remains the primary runtime; this is a
-// same-machine browser surface (native pickers degrade to typed paths).
+// Binds DECLGEN_WEB_HOST (default 127.0.0.1); remote browsers reach it through the
+// Cloudflare tunnel started by web/run/watchdog.*. Native pickers are same-machine only;
+// remote browsers upload file bytes.
 import http from 'node:http';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
