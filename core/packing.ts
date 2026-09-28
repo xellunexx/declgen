@@ -52,6 +52,8 @@ export function extractMasses(
           .split(' ')
           .filter((w) => w.length >= 3),
       );
+    const digitTok = (s: Set<string>) =>
+      new Set([...s].filter((w) => /\d/.test(w)));
     const bCand = pl
       .map((p: any, pi: number) => [key(p), pi] as const)
       .filter(([k]: any) => invByNo.has(k));
@@ -63,6 +65,10 @@ export function extractMasses(
           a = tok(p.description),
           b = tok(inv[i].description);
         if (a.size && b.size && ![...a].some((w) => b.has(w))) continue;
+        // size/model tokens ('125mm' vs '200mm') must not contradict each other
+        const da = digitTok(a),
+          db = digitTok(b);
+        if (da.size && db.size && ![...da].some((w) => db.has(w))) continue;
         if (p.net_kg != null) masses[key(inv[i])] = p.net_kg;
         usedInv.add(i);
         usedPl.add(pi);
@@ -89,6 +95,44 @@ export function extractMasses(
         usedPl.add(pi);
       }
     });
+    // Strategy C2: token-overlap alignment for docs that itemize the same
+    // goods in different order/wording. Digit-bearing tokens (model codes,
+    // sizes) weigh more; pairs are assigned greedily by unique best score.
+    const pairTok = (s: any) =>
+      new Set(
+        norm(s)
+          .split(' ')
+          .filter((w) => w.length >= 3),
+      );
+    const scored: [number, number, number][] = [];
+    pl.forEach((p: any, pi: number) => {
+      if (usedPl.has(pi)) return;
+      const a = pairTok(p.description);
+      if (a.size < 2) return;
+      const cand: [number, number][] = [];
+      inv.forEach((x: any, i: number) => {
+        if (usedInv.has(i)) return;
+        const b = pairTok(x.description);
+        let s = 0;
+        for (const w of a) if (b.has(w)) s += w.length + (/\d/.test(w) ? 2 : 0);
+        if (s >= 8) cand.push([s, i]);
+      });
+      cand.sort((x, y) => y[0] - x[0]);
+      if (cand.length && cand[0][0] > (cand[1]?.[0] ?? -1))
+        scored.push([cand[0][0], pi, cand[0][1]]);
+    });
+    scored.sort((x, y) => y[0] - x[0]);
+    let c2 = 0;
+    for (const [, pi, i] of scored) {
+      if (usedInv.has(i) || usedPl.has(pi)) continue;
+      const p = pl[pi];
+      if (p.net_kg != null) masses[key(inv[i])] = p.net_kg;
+      usedInv.add(i);
+      usedPl.add(pi);
+      c2++;
+    }
+    if (c2)
+      notes.push(`packing list matched by description similarity (${c2} rows)`);
     // Strategy D: distinctive mark (first 2 tokens, ≥6 chars) containment in invoice description.
     pl.forEach((p: any, pi: number) => {
       if (usedPl.has(pi)) return;
@@ -142,12 +186,15 @@ export function extractMasses(
     );
   let incompatible = false;
   const matched = Object.keys(masses).length;
+  // Compatibility is judged against rows that can carry a weight at all —
+  // shared-box/pallet rows have no net_kg and can never add to `matched`.
+  const weighted = pl.filter((p: any) => p.net_kg != null).length;
   if (pl.length && inv.length && pl.length !== inv.length) {
-    const th = Math.max(3, Math.ceil(0.6 * pl.length));
+    const th = Math.max(3, Math.ceil(0.6 * (weighted || pl.length)));
     if (matched < th) {
       incompatible = true;
       warnings.push(
-        `packing list не съответства на фактурата (съвпаднаха ${matched}/${pl.length} реда) — теглата са изхвърлени`,
+        `packing list не съответства на фактурата (съвпаднаха ${matched}/${weighted || pl.length} реда с тегло) — теглата са изхвърлени`,
       );
       masses = {};
     }
@@ -166,7 +213,7 @@ export function extractMasses(
     (!pl.length ||
       !inv.length ||
       pl.length === inv.length ||
-      matched >= Math.max(3, Math.ceil(0.6 * pl.length)))
+      matched >= Math.max(3, Math.ceil(0.6 * (weighted || pl.length))))
   )
     patch.total_gross_kg = gross;
   if (packing?.packages && !incompatible) {
