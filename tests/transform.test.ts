@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Catalog } from '../core/catalog.js';
 import { buildDeclaration } from '../core/transform.js';
 import { check } from '../core/conformance.js';
+import { reconcileInvoiceDeclaration } from '../core/workflow.js';
 
 const template = {
   client_id: 'test',
@@ -266,6 +267,15 @@ test('charge rows never become goods items; embedded freight funds AK', async ()
   );
   assert.ok(Math.abs(priceSum - 30) < 0.02);
   assert.ok(Math.abs(statSum - 1030) < 0.02);
+  // Reconciliation must not report the excluded charge as a missing total or
+  // count the charge row among goods positions.
+  const rec = reconcileInvoiceDeclaration(inv, d);
+  const totalsRow = rec.rows.find((r: any) => r[0] === 'Крайна сума');
+  const posRow = rec.rows.find((r: any) => r[0] === 'Позиции');
+  assert.equal(totalsRow?.[4], true);
+  assert.equal(posRow?.[1], '2');
+  assert.equal(posRow?.[4], true);
+  assert.equal(rec.ok, true);
 });
 
 test('valuation additions emit AlphaAgent A&D shape and cent-anchor', async () => {

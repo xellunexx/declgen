@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import archiver from 'archiver';
 import fsSync from 'node:fs';
+import { isChargeLine } from './transform.js';
 const dec = (x: any) => {
   const n = Number(x);
   return Number.isFinite(n) ? n : 0;
@@ -123,19 +124,43 @@ export function reconcileInvoiceDeclaration(invoice: any, decl: any) {
   };
   const money = (x: any) => rnd(dec(x), 2).toFixed(2);
   const kg = (x: any) => String(rnd(dec(x), 3));
+  const chargeLines = (invoice.lines || []).filter(isChargeLine),
+    chargeTotal = chargeLines.reduce(
+      (a: number, l: any) =>
+        a +
+        dec(
+          l.subtotal ??
+            l.total_amount ??
+            dec(l.qty ?? l.quantity) * dec(l.unit_price),
+        ),
+      0,
+    ),
+    // Service-charge rows (or an explicit shipping_cost field) are declared as
+    // AK valuation additions, not as goods — both sides of the comparison must
+    // exclude them or the freight amount reads as a missing-value diff.
+    embeddedCharge = chargeTotal || dec(invoice.shipping_cost),
+    goodsExpected = dec(invoice.grand_total) - embeddedCharge;
   if (invoice.grand_total != null && invoice.grand_total !== '') {
-    const diff = rnd(dec(dh.TotalAmountInvoiced) - dec(invoice.grand_total), 2);
+    const diff = rnd(dec(dh.TotalAmountInvoiced) - goodsExpected, 2);
     rows.push([
       'Крайна сума',
-      money(invoice.grand_total),
+      money(goodsExpected),
       money(dh.TotalAmountInvoiced),
       diff.toFixed(2),
-      diff === 0,
+      Math.abs(diff) <= 0.01,
     ]);
     if (Math.abs(diff) > 0.01)
       errors.push(
         `Крайна сума: разлика ${diff.toFixed(2)} ${dh.InvoiceCurrency}.`,
       );
+    if (embeddedCharge > 0)
+      rows.push([
+        'Транспорт/такси (АК)',
+        money(embeddedCharge),
+        money(embeddedCharge),
+        '0.00',
+        true,
+      ]);
   }
   const net = items.reduce(
       (a: number, i: any) => a + dec(i.Commodity.GOODSMEASURE.NetMassKg),
@@ -179,14 +204,17 @@ export function reconcileInvoiceDeclaration(invoice: any, decl: any) {
     if (String(invoice.pieces) !== String(dh.TotalPackages))
       warnings.push('Броят колети се различава.');
   }
+  const goodsLineCount = (invoice.lines || []).length - chargeLines.length;
   rows.push([
     'Позиции',
-    String((invoice.lines || []).length),
+    String(goodsLineCount),
     String(items.length),
-    String(items.length - (invoice.lines || []).length),
-    items.length === (invoice.lines || []).length,
+    String(items.length - goodsLineCount),
+    // Grouping legitimately collapses invoice rows into fewer declaration
+    // items — only more items than goods lines is suspicious.
+    items.length <= goodsLineCount,
   ]);
-  if (items.length > (invoice.lines || []).length)
+  if (items.length > goodsLineCount)
     warnings.push(
       'Декларацията съдържа повече позиции от фактурата (групиране/допълване — проверете).',
     );

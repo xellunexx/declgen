@@ -17,6 +17,37 @@ const num = (v: any, d = 0) => {
 };
 const f2 = (n: number) => Math.max(0, n).toFixed(2);
 const f6 = (n: number) => Math.max(0, n).toFixed(6);
+// Charge rows ('Shipping Cost', 'Freight', 'Transport') are services, not
+// goods — they must not become GOODSITEMs. Their value belongs to the AK
+// (transport) valuation addition instead of inflating a fake 999999 item.
+const CHARGE_WORDS =
+    /^(shipping|freight|transport|transportation|courier|delivery|handling|packing|packaging|insurance|customs|доставка|транспорт|застраховка|навло|превоз)s?$/i,
+  CHARGE_TAIL =
+    /^(cost|costs|charge|charges|fee|price|service|expenses|разходи|услуга)s?$/i;
+export function isChargeLine(l: any) {
+  const w = clean(l?.description)
+    .split(' ')
+    .filter(Boolean);
+  return (
+    w.length >= 1 &&
+    w.length <= 4 &&
+    w.every((x) => CHARGE_WORDS.test(x) || CHARGE_TAIL.test(x)) &&
+    w.some((x) => CHARGE_WORDS.test(x))
+  );
+}
+// A doubled line is the product name printed in both invoice columns
+// ('Dandelion Root Extract Extract Dandelion Root Extract' = name + wrapped
+// desc cell). The name reappears as the trailing words — find the longest
+// word-run shared by the head and tail and keep it once.
+export function edgeCollapse(t: string) {
+  const w = String(t || '').split(' ');
+  for (let k = Math.floor(w.length / 2); k >= 1; k--) {
+    const a = w.slice(0, k).join(' ');
+    if (a === w.slice(-k).join(' ')) return a;
+  }
+  return t;
+}
+
 const clean = (s: any) => {
   const t = String(s ?? '')
     .replace(/\s+/g, ' ')
@@ -101,15 +132,7 @@ function dynamicDescription(entry: any, lines: any[], netKg: number) {
   // catalog alias spelling when it is the same name, so canonical phrasing
   // survives; variants without an exact alias ('... subsp. infantis') keep
   // their own text.
-  const edgeCollapse = (t: string) => {
-      const w = t.split(' ');
-      for (let k = Math.floor(w.length / 2); k >= 1; k--) {
-        const a = w.slice(0, k).join(' ');
-        if (a === w.slice(-k).join(' ')) return a;
-      }
-      return t;
-    },
-    aliases = (entry.aliases || [])
+  const aliases = (entry.aliases || [])
       .map((a: any) => String(a || '').trim())
       .filter(Boolean),
     canonicalFor = (t: string) =>
@@ -238,20 +261,6 @@ export async function buildDeclaration(
     ),
   }));
   if (!raw.length) throw new Error('invoice has no lines');
-  // Charge rows ('Shipping Cost', 'Freight', 'Transport') are services, not
-  // goods — they must not become GOODSITEMs. Their value belongs to the AK
-  // (transport) valuation addition instead of inflating a fake 999999 item.
-  const CHARGE_WORDS =
-      /^(shipping|freight|transport|transportation|courier|delivery|handling|packing|packaging|insurance|customs|доставка|транспорт|застраховка|навло|превоз)s?$/i,
-    CHARGE_TAIL = /^(cost|costs|charge|charges|fee|price|service|expenses|разходи|услуга)s?$/i;
-  const isChargeLine = (l: any) => {
-    const w = clean(l.description).split(' ');
-    return (
-      w.length <= 4 &&
-      w.every((x) => CHARGE_WORDS.test(x) || CHARGE_TAIL.test(x)) &&
-      w.some((x) => CHARGE_WORDS.test(x))
-    );
-  };
   const chargeLines = raw.filter(isChargeLine),
     goods = raw.filter((l: any) => !isChargeLine(l)),
     chargeTotal = chargeLines.reduce(
@@ -310,7 +319,7 @@ export async function buildDeclaration(
       };
       new_goods.push({
         group: clean(line.description).slice(0, 120) || `line-${line.no}`,
-        descriptions: [clean(line.description)],
+        descriptions: [edgeCollapse(clean(line.description))],
         line_nos: [String(line.no)],
       });
       warnings.push(
@@ -602,7 +611,11 @@ export async function buildDeclaration(
       item: i + 1,
       group: g.group,
       line_nos: g.line_nos,
-      descriptions: g.lines.map((l: any) => clean(l.description)),
+      descriptions: [
+        ...new Set(
+          g.lines.map((l: any) => edgeCollapse(clean(l.description))),
+        ),
+      ],
       invoice_codes: g.invoice_codes,
       catalog_key: entry.key,
       source,
