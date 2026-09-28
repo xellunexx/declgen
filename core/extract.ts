@@ -18,7 +18,7 @@ const INVOICE_SYSTEM =
 const INVOICE_USER = (text: string, tables: string) =>
   `Extract this invoice into JSON with fields doc_language, invoice_number, invoice_date (YYYY-MM-DD), currency, seller {company,country,address,postcode,city}, buyer {company,country,address,postcode,city,eori}, price_term, price_term_place, carrier_or_transport, total_goods_value, shipping_cost, shipping_cost_currency, insurance_cost, insurance_currency, grand_total, other_currency_total {amount,currency}|null, total_net_weight_kg, total_gross_weight_kg, pieces, lines [{no,description,hs_code,qty,qty_unit,unit_price,subtotal,origin}]. Every goods or charge row must be retained. Do not merge rows. For each line, "description" is the full goods description: product name PLUS model/size/details — combine the product-name and product-description cells of that row (and of a shared/merged name cell spanning several variant rows). A bare size or model code like "200mm" is never a valid description by itself. JSON only.\n\nINVOICE TEXT:\n${text}\n\n${tables}`;
 const PACKING_USER = (text: string, tables: string) =>
-  `Extract this packing list as JSON with doc_language, packing_number, packing_date, total_net_weight_kg, total_gross_weight_kg, packages, lines [{no,mark,description,hs_code,qty,qty_unit,net_kg,gross_kg}]. Every table row is one line. For each line, "description" is the product name PLUS model/spec (combine the product-name and product-model cells). net_kg/gross_kg are the line's total weights, not per-carton values. JSON only.\n\nPACKING LIST TEXT:\n${text}\n\n${tables}`;
+  `Extract this packing list as JSON with doc_language, packing_number, packing_date, total_net_weight_kg, total_gross_weight_kg, packages, lines [{no,mark,description,hs_code,qty,qty_unit,net_kg,gross_kg}]. Every table row is one line. For each line, "description" is the product name PLUS model/spec (combine the product-name and product-model cells). qty is the piece count in the qty column — a package/bundle count (e.g. '50 PCS 5 Bundle') is NOT a multiplier. net_kg/gross_kg are the line's printed total weights — never multiply them by the bundle/package count. JSON only.\n\nPACKING LIST TEXT:\n${text}\n\n${tables}`;
 
 export class ExtractionCancelled extends Error {}
 export class ExtractionError extends Error {}
@@ -315,6 +315,16 @@ export function validatePacking(obj: any) {
   const out = { ...obj, lines };
   for (const k of ['total_net_weight_kg', 'total_gross_weight_kg'])
     out[k] = num(obj[k], k);
+  // A single row's net cannot exceed the printed document total — if it
+  // does, the extractor almost certainly multiplied by a bundle/package
+  // count ('50 PCS 5 Bundle' → net × 5). Flag it for review.
+  if (out.total_net_weight_kg)
+    lines.forEach((l: any, idx: number) => {
+      if (l.net_kg != null && l.net_kg > out.total_net_weight_kg + 1e-6)
+        warnings.push(
+          `packing line ${idx + 1}: net ${l.net_kg} exceeds printed total ${out.total_net_weight_kg} — likely multiplied by package count`,
+        );
+    });
   const nets = lines.map((l: any) => l.net_kg).filter((x: any) => x != null);
   if (out.total_net_weight_kg && nets.length) {
     const s = nets.reduce((a: number, b: number) => a + b, 0);
