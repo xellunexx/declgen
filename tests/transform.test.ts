@@ -117,6 +117,183 @@ test('packing line_masses reach declaration items', async () => {
   );
 });
 
+test('doubled name+desc cells dedupe inside {components} descriptions', async () => {
+  const tpl = {
+    ...template,
+    canonical_h1: { max_description_length: 268 },
+  };
+  const cat = new Catalog([
+    {
+      key: 'probiotics',
+      aliases: [
+        'Lactobacillus plantarum',
+        'Bifidobacterium longum subsp. infantis',
+      ],
+      bg_name: 'Пробиотици',
+      hs: { hs6: '300249', cn: '00', taric: '20' },
+      origin: 'CN',
+      source: 'human_verified',
+      declaration_description_template:
+        'Пробиотични култури за хранителни добавки - {net_kg} кг /{components}/',
+    },
+  ]);
+  const inv = {
+    ...invoice,
+    grand_total: 30,
+    total_goods_value: 30,
+    lines: [
+      {
+        no: 1,
+        description: 'Lactobacillus plantarum Lactobacillus plantarum',
+        hs_code: '3002493090',
+        quantity: 2,
+        unit: 'KG',
+        unit_price: 10,
+        total_amount: 20,
+        origin: 'CN',
+      },
+      {
+        no: 2,
+        description:
+          'Bifidobacterium longum subsp. infantis Bifidobacterium longum subsp. infantis',
+        hs_code: '3002493090',
+        quantity: 1,
+        unit: 'KG',
+        unit_price: 10,
+        total_amount: 10,
+        origin: 'CN',
+      },
+    ],
+  };
+  const [d] = await buildDeclaration(inv, tpl, cat, {
+    lrn: '26000000123456789H000001',
+    total_gross_kg: 3,
+  });
+  const desc = d.GOODSSHIPMENT.GOODITEM[0].Commodity.descriptionOfGoods;
+  assert.equal(desc.includes('plantarum Lactobacillus'), false);
+  assert.equal(
+    desc.includes(
+      'Lactobacillus plantarum, Bifidobacterium longum subsp. infantis',
+    ),
+    true,
+  );
+  assert.ok(desc.length <= 268);
+});
+
+test('wrapped desc-cell spillover collapses to the product name', async () => {
+  const cat = new Catalog([
+    {
+      key: 'extracts',
+      aliases: ['Dandelion Root Extract'],
+      bg_name: 'Екстракти',
+      hs: { hs6: '130219', cn: '70', taric: '00' },
+      origin: 'CN',
+      source: 'human_verified',
+      declaration_description_template: 'Екстракти - {net_kg} кг /{components}/',
+    },
+  ]);
+  const inv = {
+    ...invoice,
+    grand_total: 20,
+    total_goods_value: 20,
+    lines: [
+      {
+        no: 1,
+        // name cell + wrapped desc cell → name repeated around a stray word
+        description: 'Dandelion Root Extract Extract Dandelion Root Extract',
+        hs_code: '1302199099',
+        quantity: 2,
+        unit: 'KG',
+        unit_price: 10,
+        total_amount: 20,
+        origin: 'CN',
+      },
+    ],
+  };
+  const [d] = await buildDeclaration(inv, template, cat, {
+    lrn: '26000000123456789H000001',
+    total_gross_kg: 3,
+  });
+  const desc = d.GOODSSHIPMENT.GOODITEM[0].Commodity.descriptionOfGoods;
+  assert.equal(desc.includes('Dandelion Root Extract'), true);
+  assert.equal(desc.includes('Extract Extract'), false);
+});
+
+test('charge rows never become goods items; embedded freight funds AK', async () => {
+  const inv = {
+    ...invoice,
+    total_goods_value: 30,
+    grand_total: 1030,
+    shipping_cost: 0,
+    lines: [
+      ...invoice.lines,
+      {
+        no: 3,
+        description: 'Shipping Cost',
+        hs_code: '9999990000',
+        quantity: 1,
+        unit: 'PCE',
+        unit_price: 1000,
+        total_amount: 1000,
+        origin: 'CN',
+      },
+    ],
+  };
+  const [d, report] = await buildDeclaration(inv, template, catalog, {
+    lrn: '26000000123456789H000001',
+    total_gross_kg: 3,
+  });
+  assert.equal(d.GOODSSHIPMENT.GOODITEM.length, 2);
+  assert.equal(
+    report.grouping.some((g: any) =>
+      (g.line_nos || []).map(String).includes('3'),
+    ),
+    false,
+  );
+  assert.equal(
+    report.warnings.some((w: string) => /служебни разходи/.test(w)),
+    true,
+  );
+  // goods items stay anchored to the goods value; the 1000 charge becomes the
+  // AK valuation addition inside statistical value instead of a fake item.
+  const priceSum = d.GOODSSHIPMENT.GOODITEM.reduce(
+    (a: number, it: any) => a + Number(it.Commodity.ItemPrice),
+    0,
+  );
+  const statSum = d.GOODSSHIPMENT.GOODITEM.reduce(
+    (a: number, it: any) => a + Number(it.StatisticalValue),
+    0,
+  );
+  assert.ok(Math.abs(priceSum - 30) < 0.02);
+  assert.ok(Math.abs(statSum - 1030) < 0.02);
+});
+
+test('declaration_context previous_documents reach GOODSSHIPMENT', async () => {
+  const [d] = await buildDeclaration(invoice, template, catalog, {
+    lrn: '26000000123456789H000001',
+    total_gross_kg: 3,
+    declaration_context: {
+      declaration_type: 'IM',
+      previous_documents: [
+        { type: 'N337', referenceNumber: '26BG005100693131U2' },
+      ],
+    },
+  });
+  const prev = d.GOODSSHIPMENT.PreviousDocument;
+  assert.equal(prev.length, 1);
+  assert.equal(prev[0].type, 'N337');
+  assert.equal(prev[0].referenceNumber, '26BG005100693131U2');
+  const issues = check(d, {
+    canonical_h1: { required_previous_document_type: 'N337' },
+  });
+  assert.equal(
+    issues.some(
+      (i) => i.where === 'GOODSSHIPMENT.PreviousDocument' && i.level === 'ERROR',
+    ),
+    false,
+  );
+});
+
 test('human-verified catalog build has no classification placeholder', async () => {
   const [d, report] = await buildDeclaration(invoice, template, catalog, {
     lrn: '26000000123456789H000001',

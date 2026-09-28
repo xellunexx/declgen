@@ -3,7 +3,7 @@
  *  from the supplied archive, so this module is intentionally isolated and regression-tested. */
 import type { Declaration, GoodItem, TypedRef } from './model.js';
 import { newDeclaration, newGoodItem, party, address } from './model.js';
-import { Catalog } from './catalog.js';
+import { Catalog, norm } from './catalog.js';
 import { resolve as resolveContext } from './declaration-context.js';
 import { refInvoice, refProforma } from './box44.js';
 import { ALPHA_TEXT_LIMITS } from './conformance.js';
@@ -17,10 +17,22 @@ const num = (v: any, d = 0) => {
 };
 const f2 = (n: number) => Math.max(0, n).toFixed(2);
 const f6 = (n: number) => Math.max(0, n).toFixed(6);
-const clean = (s: any) =>
-  String(s ?? '')
+const clean = (s: any) => {
+  const t = String(s ?? '')
     .replace(/\s+/g, ' ')
     .trim();
+  // Supplier invoices often print the same text in the name and description
+  // cells, producing 'White Birch Extract White Birch Extract'. Collapse an
+  // exact doubled phrase — it doubles description length without adding data.
+  const w = t.split(' ');
+  if (w.length >= 2 && w.length % 2 === 0) {
+    const h = w.length / 2,
+      a = w.slice(0, h).join(' '),
+      b = w.slice(h).join(' ');
+    if (a === b) return a;
+  }
+  return t;
+};
 const iso = (s: any, fallback = 'CN') =>
   /^[A-Z]{2}$/.test(String(s ?? '').toUpperCase())
     ? String(s).toUpperCase()
@@ -82,10 +94,33 @@ function dynamicDescription(entry: any, lines: any[], netKg: number) {
   const net = f6(sourceNet)
     .replace(/\.?0+$/, '')
     .replace('.', ',');
-  const components = lines
-    .map((l: any) => clean(l.description))
-    .filter(Boolean)
-    .join(', ');
+  // A doubled line is the product name printed in both invoice columns
+  // ('Dandelion Root Extract Extract Dandelion Root Extract' = name + wrapped
+  // desc cell). The name reappears as the trailing words — find the longest
+  // word-run shared by the head and tail and keep it once. Then prefer the
+  // catalog alias spelling when it is the same name, so canonical phrasing
+  // survives; variants without an exact alias ('... subsp. infantis') keep
+  // their own text.
+  const edgeCollapse = (t: string) => {
+      const w = t.split(' ');
+      for (let k = Math.floor(w.length / 2); k >= 1; k--) {
+        const a = w.slice(0, k).join(' ');
+        if (a === w.slice(-k).join(' ')) return a;
+      }
+      return t;
+    },
+    aliases = (entry.aliases || [])
+      .map((a: any) => String(a || '').trim())
+      .filter(Boolean),
+    canonicalFor = (t: string) =>
+      aliases.find((a: string) => norm(a) === norm(t)) || t;
+  const components = [
+    ...new Set(
+      lines
+        .map((l: any) => canonicalFor(edgeCollapse(clean(l.description))))
+        .filter(Boolean),
+    ),
+  ].join(', ');
   return template
     .replaceAll('{net_kg}', net)
     .replaceAll('{components}', components);
@@ -203,11 +238,37 @@ export async function buildDeclaration(
     ),
   }));
   if (!raw.length) throw new Error('invoice has no lines');
+  // Charge rows ('Shipping Cost', 'Freight', 'Transport') are services, not
+  // goods — they must not become GOODSITEMs. Their value belongs to the AK
+  // (transport) valuation addition instead of inflating a fake 999999 item.
+  const CHARGE_WORDS =
+      /^(shipping|freight|transport|transportation|courier|delivery|handling|packing|packaging|insurance|customs|доставка|транспорт|застраховка|навло|превоз)s?$/i,
+    CHARGE_TAIL = /^(cost|costs|charge|charges|fee|price|service|expenses|разходи|услуга)s?$/i;
+  const isChargeLine = (l: any) => {
+    const w = clean(l.description).split(' ');
+    return (
+      w.length <= 4 &&
+      w.every((x) => CHARGE_WORDS.test(x) || CHARGE_TAIL.test(x)) &&
+      w.some((x) => CHARGE_WORDS.test(x))
+    );
+  };
+  const chargeLines = raw.filter(isChargeLine),
+    goods = raw.filter((l: any) => !isChargeLine(l)),
+    chargeTotal = chargeLines.reduce(
+      (a: number, l: any) => a + l.subtotal,
+      0,
+    );
+  if (!goods.length)
+    throw new Error('invoice has only charge rows, no goods lines');
   const matches: any[] = [],
     new_goods: any[] = [],
     warnings: string[] = [],
     groupsMap = new Map<string, any>();
-  for (const line of raw) {
+  if (chargeLines.length)
+    warnings.push(
+      `ред(ове) ${JSON.stringify(chargeLines.map((l: any) => l.no))} са служебни разходи (${chargeLines.map((l: any) => clean(l.description)).join('; ')}) — не са стокови позиции; ${f2(chargeTotal)} отива към транспортната добавка (АК), не в цените`,
+    );
+  for (const line of goods) {
     const [entry, score] = catalog.match(clean(line.description), line.hs_code);
     const invCode = code10(line.hs_code);
     let source = 'invoice_code_fallback',
@@ -278,23 +339,27 @@ export async function buildDeclaration(
     if (invCode && !g.invoice_codes.includes(invCode))
       g.invoice_codes.push(invCode);
   }
-  for (const l of raw)
+  for (const l of goods)
     if (l.subtotal < 0)
       warnings.push(
         `ред ${l.no}: отрицателна стойност ${l.subtotal} — приспада към 0.00 при деклариране, проверете кредитния ред`,
       );
   const groups = [...groupsMap.values()],
-    declaredFreight = num(extras.valuation_freight_total),
     goodsValue = num(invoice.total_goods_value),
+    // Freight embedded in the invoice (a charge row or the shipping_cost
+    // field) is already inside grand_total — it must be stripped from the
+    // item-price anchor while it feeds the AK valuation addition.
+    embeddedFreight = chargeTotal || num(invoice.shipping_cost),
+    declaredFreight = num(extras.valuation_freight_total) || embeddedFreight,
+    lineTotal = goods.reduce((a: number, l: any) => a + l.subtotal, 0),
     totalInvoice =
       declaredFreight > 0 && goodsValue > 0
         ? goodsValue
-        : num(
-            invoice.grand_total ??
-              invoice.total_goods_value ??
-              raw.reduce((a: number, l: any) => a + l.subtotal, 0),
-          ),
-    lineTotal = raw.reduce((a: number, l: any) => a + l.subtotal, 0);
+        : Math.max(
+            num(invoice.grand_total ?? invoice.total_goods_value) -
+              embeddedFreight,
+            0,
+          ) || lineTotal;
   if (Math.abs(totalInvoice - lineTotal) > 0.02)
     warnings.push(
       `Крайна сума ${f2(totalInvoice)} надвишава сбора на редовете ${f2(lineTotal)} с ${f2(Math.abs(totalInvoice - lineTotal))} (напр. транспорт/такси) — разликата е разпределена пропорционално по позициите`,
@@ -413,14 +478,21 @@ export async function buildDeclaration(
           entry.bg_name || g.lines.map((l: any) => l.description).join('; '),
         ),
       phrase = canonicalDescription ? '' : clean(entry.bg_phrase),
-      desc = (
-        canonicalDescription || `${descBase}${phrase ? ` - ${phrase}` : ''}`
-      ).slice(0, 510),
+      maxDesc =
+        Number(template?.canonical_h1?.max_description_length) ||
+        ALPHA_TEXT_LIMITS.descriptionOfGoods,
+      descFull =
+        canonicalDescription || `${descBase}${phrase ? ` - ${phrase}` : ''}`,
+      desc = descFull.slice(0, maxDesc),
       it = newGoodItem({
         GoodsItemNo: String(i + 1),
         StatisticalValue: f2(stat),
       });
     it.Commodity.descriptionOfGoods = desc;
+    if (descFull.length > maxDesc)
+      warnings.push(
+        `позиция ${i + 1}: описанието е ${descFull.length} символа > ${maxDesc} — съкратено до максимума, проверете загубения текст`,
+      );
     it.Commodity.CommodityCode = {
       harmonizedSystemSubheadingCode: code.slice(0, 6),
       combinedNomenclatureCode: code.slice(6, 8),

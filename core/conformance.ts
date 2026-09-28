@@ -63,6 +63,7 @@ export const ALPHA_TEXT_LIMITS = {
   locationPostcode: 4,
   shippingMarks: 5,
   additionalReference: 9,
+  descriptionOfGoods: 512,
 } as const;
 
 export interface Issue {

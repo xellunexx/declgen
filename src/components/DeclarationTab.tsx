@@ -47,6 +47,15 @@ function setOrDelete(
   else target[key] = value;
 }
 
+type DocRow = { type: string; referenceNumber: string };
+
+function docsFrom(initial: Record<string, unknown>): DocRow[] {
+  return ((initial.previous_documents as DocRow[]) || []).map((d) => ({
+    type: String(d?.type ?? ''),
+    referenceNumber: String(d?.referenceNumber ?? ''),
+  }));
+}
+
 function H1ContextModal({
   initial,
   caseId,
@@ -61,6 +70,7 @@ function H1ContextModal({
   onSaved: () => void;
 }) {
   const [ctx, setCtx] = useState<FlatContext>(() => flattenContext(initial));
+  const [docs, setDocs] = useState<DocRow[]>(() => docsFrom(initial));
   const [dirty, setDirty] = useState(false);
   const [baseRevision, setBaseRevision] = useState(revision);
   const scopeRef = useRef(caseId);
@@ -71,6 +81,7 @@ function H1ContextModal({
     if (scopeChanged || !dirty) {
       scopeRef.current = caseId;
       setCtx(flattenContext(initial));
+      setDocs(docsFrom(initial));
       setBaseRevision(revision);
       if (scopeChanged) setDirty(false);
     }
@@ -124,6 +135,19 @@ function H1ContextModal({
     if (Object.keys(delivery).length) next.delivery_terms = delivery;
     else delete next.delivery_terms;
 
+    const prevDocs = docs
+      .map((d) => ({
+        type: d.type.trim().toUpperCase(),
+        referenceNumber: d.referenceNumber.trim(),
+      }))
+      .filter((d) => d.type || d.referenceNumber);
+    if (prevDocs.some((d) => !d.type || !d.referenceNumber))
+      return window.alert(
+        'Всеки предишен документ изисква и вид (напр. N337), и референция.',
+      );
+    if (prevDocs.length) next.previous_documents = prevDocs;
+    else delete next.previous_documents;
+
     const res = await declgenApi.saveH1Context(next, caseId, baseRevision);
     if (res.ok === false)
       return window.alert(res.error || 'Грешка при запис на H1 контекст.');
@@ -174,6 +198,80 @@ function H1ContextModal({
           );
         })}
       </div>
+      <div className="subsection-head">
+        <strong>Предишни документи (D.E. 2/7)</strong>
+        <Button
+          onClick={() => {
+            setDirty(true);
+            setDocs((p) => [...p, { type: 'N337', referenceNumber: '' }]);
+          }}
+        >
+          ＋
+        </Button>
+      </div>
+      {docs.length ? (
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Вид</th>
+                <th>Референция</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {docs.map((d, i) => (
+                <tr key={i}>
+                  <td>
+                    <input
+                      value={d.type}
+                      onChange={(e) => {
+                        setDirty(true);
+                        setDocs((p) =>
+                          p.map((x, j) =>
+                            j === i ? { ...x, type: e.target.value } : x,
+                          ),
+                        );
+                      }}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      value={d.referenceNumber}
+                      onChange={(e) => {
+                        setDirty(true);
+                        setDocs((p) =>
+                          p.map((x, j) =>
+                            j === i
+                              ? { ...x, referenceNumber: e.target.value }
+                              : x,
+                          ),
+                        );
+                      }}
+                    />
+                  </td>
+                  <td>
+                    <Button
+                      kind="danger"
+                      onClick={() => {
+                        setDirty(true);
+                        setDocs((p) => p.filter((_, j) => j !== i));
+                      }}
+                    >
+                      ×
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="hint">
+          Профилът Evelin изисква N337 референция на предходно митническо
+          оформление (напр. EX декларация).
+        </p>
+      )}
       <div className="modal-actions">
         <Button onClick={onClose}>Отказ</Button>
         <Button
