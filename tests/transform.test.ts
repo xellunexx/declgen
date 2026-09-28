@@ -268,6 +268,32 @@ test('charge rows never become goods items; embedded freight funds AK', async ()
   assert.ok(Math.abs(statSum - 1030) < 0.02);
 });
 
+test('valuation additions emit AlphaAgent A&D shape and cent-anchor', async () => {
+  const [d] = await buildDeclaration(invoice, template, catalog, {
+    lrn: '26000000123456789H000001',
+    total_gross_kg: 3,
+    valuation_freight_total: '100.01',
+  });
+  for (const it of d.GOODSSHIPMENT.GOODITEM) {
+    const codes = it.CUSTOMSVALUATION.AdditionsAndDeductions.map(
+      (a: any) => a.code,
+    );
+    // AlphaAgent-accepted shape: AK only when freight>0, then BC and FF always.
+    assert.deepEqual(codes, ['AK', 'BC', 'FF']);
+  }
+  const akSum = d.GOODSSHIPMENT.GOODITEM.reduce(
+    (a: number, it: any) =>
+      a +
+      Number(
+        it.CUSTOMSVALUATION.AdditionsAndDeductions.find(
+          (x: any) => x.code === 'AK',
+        ).amount,
+      ),
+    0,
+  );
+  assert.ok(Math.abs(akSum - 100.01) < 0.005);
+});
+
 test('declaration_context previous_documents reach GOODSSHIPMENT', async () => {
   const [d] = await buildDeclaration(invoice, template, catalog, {
     lrn: '26000000123456789H000001',

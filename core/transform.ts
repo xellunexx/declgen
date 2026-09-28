@@ -445,20 +445,44 @@ export async function buildDeclaration(
         );
     }
   }
+  // Cent-anchor the per-item valuation additions so Σ AK == freight total and
+  // Σ BC == insurance total exactly (remainder lands on the largest item).
+  const netAll = (masses.nets || []).reduce(
+      (x: number, nn: number) => x + (Number(nn) || 0),
+      0,
+    ),
+    freightCents = groups.map((g, i) => {
+      const netW = Number(masses.nets[i]) || 0,
+        rawVal = g.lines.reduce((a: number, l: any) => a + l.subtotal, 0),
+        wShare = netAll > 0 ? netW / netAll : rawVal / totalBase;
+      return Math.round(addFreight * wShare * 100);
+    }),
+    insCents = groups.map((g) =>
+      Math.round(
+        addInsurance *
+          (g.lines.reduce((a: number, l: any) => a + l.subtotal, 0) /
+            totalBase) *
+          100,
+      ),
+    );
+  for (const [cents, total] of [
+    [freightCents, addFreight],
+    [insCents, addInsurance],
+  ] as const) {
+    const diff = Math.round(total * 100) - cents.reduce((a, b) => a + b, 0);
+    if (diff && cents.length) {
+      let k = 0;
+      for (let i = 1; i < cents.length; i++) if (cents[i] > cents[k]) k = i;
+      cents[k] += diff;
+    }
+  }
   for (let i = 0; i < groups.length; i++) {
     const g = groups[i],
       entry = g.entry,
       priceRaw = g.lines.reduce((a: number, l: any) => a + l.subtotal, 0),
       price = priceCents[i] / 100,
-      share = priceRaw / totalBase,
-      netW = Number(masses.nets[i]) || 0,
-      netAll = (masses.nets || []).reduce(
-        (x: number, nn: number) => x + (Number(nn) || 0),
-        0,
-      ),
-      wShare = netAll > 0 ? netW / netAll : share,
-      freight = addFreight * wShare,
-      insurance = addInsurance * share,
+      freight = freightCents[i] / 100,
+      insurance = insCents[i] / 100,
       stat = (price + freight + insurance) * exchange,
       code =
         String(entry.hs?.hs6 || '999999') +
@@ -514,12 +538,17 @@ export async function buildDeclaration(
         : null,
     };
     it.Commodity.ItemPrice = f2(price);
-    it.Commodity.InvDest = String(entry.inv_dest || '1');
+    it.Commodity.InvDest = String(
+      entry.inv_dest || defaults.inv_dest || extras.inv_dest || '1',
+    );
     it.CUSTOMSVALUATION = {
       ValuationMethod: '1',
+      // AlphaAgent always serialises BC + FF (FF is a permanent 0); AK only
+      // appears when a freight addition exists.
       AdditionsAndDeductions: [
         ...(freight ? [{ code: 'AK', amount: f2(freight) }] : []),
-        ...(insurance ? [{ code: 'BC', amount: f2(insurance) }] : []),
+        { code: 'BC', amount: insurance ? f2(insurance) : '0' },
+        { code: 'FF', amount: '0' },
       ],
     };
     it.Procedure = {
@@ -540,7 +569,9 @@ export async function buildDeclaration(
         extras.shipping_marks || defaults.shipping_marks || 'Колет',
       ).slice(0, ALPHA_TEXT_LIMITS.shippingMarks),
       NumberOfPackages: i === 0 ? totalPackages : '0',
-      TypeOfPackages: String(extras.package_type || 'CT'),
+      TypeOfPackages: String(
+        extras.package_type || defaults.package_type || 'CT',
+      ),
     };
     it.SupportingDocument = structuredClone(docs.support);
     it.TransportDocument = structuredClone(docs.transport);
@@ -555,7 +586,10 @@ export async function buildDeclaration(
           }))
         : [];
     it.ValuationIndicator = String(
-      entry.valuation_indicator || extras.valuation_indicator || '0000',
+      entry.valuation_indicator ||
+        extras.valuation_indicator ||
+        defaults.valuation_indicator ||
+        '0000',
     );
     items.push(it);
     const source = g.source,
