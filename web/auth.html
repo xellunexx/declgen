@@ -33,10 +33,6 @@
     <input id="name" autocomplete="username" required minlength="2" />
     <label>Парола</label>
     <input id="pass" type="password" autocomplete="current-password" required />
-    <div id="invite-row" hidden>
-      <label>Код за покана</label>
-      <input id="invite" autocomplete="off" />
-    </div>
     <button id="go" type="submit">Вход</button>
   </form>
   <div class="err" id="err" role="alert"></div>
@@ -52,7 +48,6 @@ function setMode(m) {
   go.textContent = m === 'login' ? 'Вход' : 'Създай акаунт';
   pass.autocomplete = m === 'login' ? 'current-password' : 'new-password';
   pass.minLength = m === 'login' ? 1 : 10;
-  document.getElementById('invite-row').hidden = m === 'login';
   err.textContent = '';
 }
 tL.onclick = () => setMode('login'); tR.onclick = () => setMode('register');
@@ -62,7 +57,7 @@ f.onsubmit = async (e) => {
   const name = document.getElementById('name').value.trim();
   const r = await fetch('/__auth/' + mode, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name, password: pass.value, invite: document.getElementById('invite').value.trim() }),
+    body: JSON.stringify({ name, password: pass.value }),
   });
   const j = await r.json().catch(() => ({ ok: false, error: 'сървърна грешка' }));
   if (j.ok) location.href = '/';

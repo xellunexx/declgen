@@ -48,15 +48,6 @@ const cookieFlags = (req) => `HttpOnly; SameSite=Lax; Path=/${isLocalRequest(req
 const sessCookie = (req, token) => `declgen_sess=${token}; ${cookieFlags(req)}; Max-Age=2592000`;
 const killCookie = (req) => `declgen_sess=; ${cookieFlags(req)}; Max-Age=0`;
 
-// Remote (tunnel) registration requires DECLGEN_INVITE_CODE; same-machine registration is always allowed.
-const INVITE_CODE = String(process.env.DECLGEN_INVITE_CODE || '');
-function inviteAccepted(req, body) {
-  if (isLocalRequest(req)) return true;
-  if (!INVITE_CODE) return false;
-  const a = Buffer.from(String(body?.invite || '')), b = Buffer.from(INVITE_CODE);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
-}
-
 const AUTH_WINDOW_MS = 10 * 60 * 1000;
 const AUTH_MAX_ATTEMPTS = 10;
 const authAttempts = new Map();
@@ -82,7 +73,6 @@ async function handleAuth(req, res, url) {
   }
   if (url.pathname === '/__auth/register' && req.method === 'POST') {
     const b = await readBody(req);
-    if (!inviteAccepted(req, b)) return json(res, 403, { ok: false, error: 'Регистрацията изисква валиден код за покана.' });
     const r = await auth.registerAndLogin(b);
     if (r.ok) res.setHeader('set-cookie', sessCookie(req, r.token));
     return json(res, r.ok ? 200 : 400, { ok: r.ok, error: r.error, user: r.user });
@@ -149,7 +139,7 @@ function send(res, code, body, headers = {}) {
 const json = (res, code, obj) => send(res, code, obj, { 'content-type': 'application/json; charset=utf-8' });
 
 // Same-machine requests only: loopback Host and no proxy/tunnel forwarding headers.
-// Native dialogs and server-filesystem/process endpoints are restricted to these.
+// Native dialogs are restricted to these; a tunnel visitor uploads file bytes instead.
 function isLocalRequest(req) {
   const host = String(req.headers.host || '').toLowerCase();
   if (!/^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(host)) return false;
@@ -158,14 +148,6 @@ function isLocalRequest(req) {
 async function nativeAllowed(req) {
   return isLocalRequest(req);
 }
-const LOCAL_ONLY_API = new Set([
-  'POST /api/dossier/select_folder',
-  'POST /api/profile_import/inspect',
-  'POST /api/llm/start',
-  'POST /api/llm/stop',
-  'POST /api/llm/config',
-  'POST /api/llm/verify',
-]);
 let nativeDialogActive = false;
 async function nativeSelect(req, res, body) {
   if (!(await nativeAllowed(req))) {
@@ -252,9 +234,6 @@ async function receiveBrowserUpload(req, sessionUser) {
 }
 
 async function handleApi(req, res, url, sessionUser) {
-  if (LOCAL_ONLY_API.has(`${req.method} ${url.pathname}`) && !isLocalRequest(req)) {
-    return json(res, 403, { ok: false, error: 'Тази операция е разрешена само от сървърната машина.' });
-  }
   if (req.method === 'POST' && url.pathname === '/api/dossier/browser-upload') {
     const files = await receiveBrowserUpload(req, sessionUser);
     return json(res, 200, await service.uploadPaths(files));
@@ -363,9 +342,6 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const events = Array.isArray(body) ? body : [];
       return json(res, 200, { ok: true, stored: await appendTelemetry(events.slice(0, 500)) });
-    }
-    if ((url.pathname === '/__telemetry/tail' || url.pathname === '/__telemetry/annotations') && !isLocalRequest(req)) {
-      return json(res, 403, { ok: false, error: 'forbidden' });
     }
     if (url.pathname === '/__telemetry/tail') {
       const n = Math.min(Math.max(Number(url.searchParams.get('n') || 100), 1), 2000);
