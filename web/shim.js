@@ -106,12 +106,6 @@
     return Promise.resolve();
   }
 
-  async function openPath(p) {
-    try {
-      const r = await fetch('/__native/open', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: p }) });
-      return await r.json();
-    } catch (e) { return { ok: false, error: String(e) }; }
-  }
 
   window.desktop = Object.freeze({ selectFiles, selectFolder, openExternal, request, upload, uploadBrowserFiles, download });
 

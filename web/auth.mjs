@@ -8,8 +8,17 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 
 const SESSION_TTL_MS = 30 * 24 * 3600 * 1000; // 30 days
+const MIN_PASSWORD = 10;
 
 let DIR = null, USERS = null, SESSIONS = null;
+
+// Serializes every read-modify-write of users.json / sessions.json.
+let writeChain = Promise.resolve();
+const locked = (fn) => { const r = writeChain.then(fn); writeChain = r.catch(() => {}); return r; };
+
+const scryptAsync = (password, salt) => new Promise((resolve, reject) =>
+  crypto.scrypt(String(password), salt, 64, (err, key) => (err ? reject(err) : resolve(key.toString('hex')))));
+const tokenDigest = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
 
 export function initAuth(dataRoot) {
   DIR = path.join(dataRoot, 'auth');
@@ -27,33 +36,36 @@ async function writeJson(file, data) {
   await fs.rename(tmp, file);
 }
 
-const hash = (password, salt) => crypto.scryptSync(String(password), salt, 64).toString('hex');
-
 const validName = (s) => /^[A-Za-zА-Яа-я0-9 _.-]{2,40}$/.test(String(s || '').trim());
 const cleanId = (name) => String(name).trim().toLowerCase().replace(/[^a-zа-я0-9]+/gi, '_').replace(/^_+|_+$/g, '').slice(0, 32) || 'user';
 
 export async function register({ name, password }) {
   name = String(name || '').trim();
   if (!validName(name)) return { ok: false, error: 'Името трябва да е 2–40 знака (букви/цифри).' };
-  if (String(password || '').length < 6) return { ok: false, error: 'Паролата трябва да е поне 6 знака.' };
-  const users = await readJson(USERS, []);
-  const base = cleanId(name);
-  let id = base, i = 2;
-  while (users.some((u) => u.id === id)) id = `${base}_${i++}`;
+  if (String(password || '').length < MIN_PASSWORD) return { ok: false, error: `Паролата трябва да е поне ${MIN_PASSWORD} знака.` };
   const salt = crypto.randomBytes(16).toString('hex');
-  const user = { id, name, salt, pass_hash: hash(password, salt), created_at: new Date().toISOString() };
-  users.push(user);
-  await writeJson(USERS, users);
-  return { ok: true, user: { id, name } };
+  const pass_hash = await scryptAsync(password, salt);
+  return locked(async () => {
+    const users = await readJson(USERS, []);
+    const base = cleanId(name);
+    let id = base, i = 2;
+    while (users.some((u) => u.id === id)) id = `${base}_${i++}`;
+    const user = { id, name, salt, pass_hash, created_at: new Date().toISOString() };
+    users.push(user);
+    await writeJson(USERS, users);
+    return { ok: true, user: { id, name } };
+  });
 }
 
-async function newSession(user) {
-  const sessions = await readJson(SESSIONS, []);
-  const alive = sessions.filter((s) => Date.now() - Date.parse(s.created_at) < SESSION_TTL_MS);
-  const token = crypto.randomBytes(24).toString('hex');
-  alive.push({ token, user_id: user.id, name: user.name, created_at: new Date().toISOString() });
-  await writeJson(SESSIONS, alive);
-  return token;
+function newSession(user) {
+  return locked(async () => {
+    const sessions = await readJson(SESSIONS, []);
+    const alive = sessions.filter((s) => s.token_sha256 && Date.now() - Date.parse(s.created_at) < SESSION_TTL_MS);
+    const token = crypto.randomBytes(32).toString('hex');
+    alive.push({ token_sha256: tokenDigest(token), user_id: user.id, name: user.name, created_at: new Date().toISOString() });
+    await writeJson(SESSIONS, alive);
+    return token;
+  });
 }
 
 export async function registerAndLogin(input) {
@@ -66,17 +78,17 @@ export async function login({ name, password }) {
   const users = await readJson(USERS, []);
   const id = cleanId(name || '');
   const user = users.find((u) => u.id === id || u.name.toLowerCase() === String(name || '').trim().toLowerCase());
-  if (!user) return { ok: false, error: 'Няма такъв акаунт.' };
-  const attempt = hash(password || '', user.salt);
-  const ok = crypto.timingSafeEqual(Buffer.from(attempt, 'hex'), Buffer.from(user.pass_hash, 'hex'));
-  if (!ok) return { ok: false, error: 'Грешна парола.' };
+  const attempt = await scryptAsync(password || '', user ? user.salt : 'no-such-user');
+  const ok = !!user && crypto.timingSafeEqual(Buffer.from(attempt, 'hex'), Buffer.from(user.pass_hash, 'hex'));
+  if (!ok) return { ok: false, error: 'Грешно име или парола.' };
   return { ok: true, user: { id: user.id, name: user.name }, token: await newSession(user) };
 }
 
 export async function resolveSession(token) {
   if (!token) return null;
   const sessions = await readJson(SESSIONS, []);
-  const s = sessions.find((x) => x.token === token);
+  const digest = tokenDigest(token);
+  const s = sessions.find((x) => x.token_sha256 === digest);
   if (!s) return null;
   if (Date.now() - Date.parse(s.created_at) >= SESSION_TTL_MS) return null;
   return { user_id: s.user_id, name: s.name };
@@ -84,9 +96,12 @@ export async function resolveSession(token) {
 
 export async function logout(token) {
   if (!token) return { ok: true };
-  const sessions = await readJson(SESSIONS, []);
-  await writeJson(SESSIONS, sessions.filter((x) => x.token !== token));
-  return { ok: true };
+  const digest = tokenDigest(token);
+  return locked(async () => {
+    const sessions = await readJson(SESSIONS, []);
+    await writeJson(SESSIONS, sessions.filter((x) => x.token_sha256 !== digest));
+    return { ok: true };
+  });
 }
 
 export async function hasAnyUser() {

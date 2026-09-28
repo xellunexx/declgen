@@ -5,6 +5,7 @@ import http from 'node:http';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -43,29 +44,58 @@ function cookies(req) {
   }
   return out;
 }
-const sessCookie = (token) => `declgen_sess=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000`;
-const killCookie = 'declgen_sess=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0';
+const cookieFlags = (req) => `HttpOnly; SameSite=Lax; Path=/${isLocalRequest(req) ? '' : '; Secure'}`;
+const sessCookie = (req, token) => `declgen_sess=${token}; ${cookieFlags(req)}; Max-Age=2592000`;
+const killCookie = (req) => `declgen_sess=; ${cookieFlags(req)}; Max-Age=0`;
+
+// Remote (tunnel) registration requires DECLGEN_INVITE_CODE; same-machine registration is always allowed.
+const INVITE_CODE = String(process.env.DECLGEN_INVITE_CODE || '');
+function inviteAccepted(req, body) {
+  if (isLocalRequest(req)) return true;
+  if (!INVITE_CODE) return false;
+  const a = Buffer.from(String(body?.invite || '')), b = Buffer.from(INVITE_CODE);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+const AUTH_WINDOW_MS = 10 * 60 * 1000;
+const AUTH_MAX_ATTEMPTS = 10;
+const authAttempts = new Map();
+function clientKey(req) {
+  return String(req.headers['cf-connecting-ip'] || req.socket.remoteAddress || 'unknown');
+}
+function authRateLimited(req) {
+  const now = Date.now(), key = clientKey(req);
+  const recent = (authAttempts.get(key) || []).filter((t) => now - t < AUTH_WINDOW_MS);
+  recent.push(now);
+  authAttempts.set(key, recent);
+  if (authAttempts.size > 10000) for (const [k, v] of authAttempts) if (!v.some((t) => now - t < AUTH_WINDOW_MS)) authAttempts.delete(k);
+  return recent.length > AUTH_MAX_ATTEMPTS;
+}
 
 async function handleAuth(req, res, url) {
   if (url.pathname === '/__auth' && req.method === 'GET') {
     const data = await fs.readFile(path.join(ROOT, 'web', 'auth.html'));
     return send(res, 200, data, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
   }
+  if ((url.pathname === '/__auth/register' || url.pathname === '/__auth/login') && req.method === 'POST' && authRateLimited(req)) {
+    return json(res, 429, { ok: false, error: 'Твърде много опити. Опитайте отново след 10 минути.' });
+  }
   if (url.pathname === '/__auth/register' && req.method === 'POST') {
     const b = await readBody(req);
+    if (!inviteAccepted(req, b)) return json(res, 403, { ok: false, error: 'Регистрацията изисква валиден код за покана.' });
     const r = await auth.registerAndLogin(b);
-    if (r.ok) res.setHeader('set-cookie', sessCookie(r.token));
-    return json(res, 200, { ok: r.ok, error: r.error, user: r.user });
+    if (r.ok) res.setHeader('set-cookie', sessCookie(req, r.token));
+    return json(res, r.ok ? 200 : 400, { ok: r.ok, error: r.error, user: r.user });
   }
   if (url.pathname === '/__auth/login' && req.method === 'POST') {
     const b = await readBody(req);
     const r = await auth.login(b);
-    if (r.ok) res.setHeader('set-cookie', sessCookie(r.token));
-    return json(res, 200, { ok: r.ok, error: r.error, user: r.user });
+    if (r.ok) res.setHeader('set-cookie', sessCookie(req, r.token));
+    return json(res, r.ok ? 200 : 401, { ok: r.ok, error: r.error, user: r.user });
   }
   if (url.pathname === '/__auth/logout' && req.method === 'POST') {
     await auth.logout(cookies(req).declgen_sess);
-    res.setHeader('set-cookie', killCookie);
+    res.setHeader('set-cookie', killCookie(req));
     return json(res, 200, { ok: true });
   }
   if (url.pathname === '/__auth/me' && req.method === 'GET') {
@@ -118,12 +148,24 @@ function send(res, code, body, headers = {}) {
 }
 const json = (res, code, obj) => send(res, code, obj, { 'content-type': 'application/json; charset=utf-8' });
 
-// Native Windows file/folder dialogs are deliberately loopback-only. A tunnel visitor must
-// never open a dialog on the server desktop: their browser uploads file bytes instead.
-async function nativeAllowed(req) {
+// Same-machine requests only: loopback Host and no proxy/tunnel forwarding headers.
+// Native dialogs and server-filesystem/process endpoints are restricted to these.
+function isLocalRequest(req) {
   const host = String(req.headers.host || '').toLowerCase();
-  return /^(127\.0\.0\.1|localhost)(:\d+)?$/.test(host);
+  if (!/^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(host)) return false;
+  return !['cf-connecting-ip', 'cf-ray', 'x-forwarded-for', 'x-forwarded-host', 'forwarded'].some((h) => req.headers[h]);
 }
+async function nativeAllowed(req) {
+  return isLocalRequest(req);
+}
+const LOCAL_ONLY_API = new Set([
+  'POST /api/dossier/select_folder',
+  'POST /api/profile_import/inspect',
+  'POST /api/llm/start',
+  'POST /api/llm/stop',
+  'POST /api/llm/config',
+  'POST /api/llm/verify',
+]);
 let nativeDialogActive = false;
 async function nativeSelect(req, res, body) {
   if (!(await nativeAllowed(req))) {
@@ -146,9 +188,18 @@ async function nativeSelect(req, res, body) {
   });
 }
 
+const JSON_BODY_MAX_BYTES = 2 * 1024 * 1024;
+class HttpError extends Error {
+  constructor(status, message) { super(message); this.status = status; }
+}
 async function readBody(req) {
   const chunks = [];
-  for await (const c of req) chunks.push(c);
+  let size = 0;
+  for await (const c of req) {
+    size += c.length;
+    if (size > JSON_BODY_MAX_BYTES) throw new HttpError(413, 'Заявката е твърде голяма.');
+    chunks.push(c);
+  }
   if (!chunks.length) return {};
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return {}; }
 }
@@ -201,6 +252,9 @@ async function receiveBrowserUpload(req, sessionUser) {
 }
 
 async function handleApi(req, res, url, sessionUser) {
+  if (LOCAL_ONLY_API.has(`${req.method} ${url.pathname}`) && !isLocalRequest(req)) {
+    return json(res, 403, { ok: false, error: 'Тази операция е разрешена само от сървърната машина.' });
+  }
   if (req.method === 'POST' && url.pathname === '/api/dossier/browser-upload') {
     const files = await receiveBrowserUpload(req, sessionUser);
     return json(res, 200, await service.uploadPaths(files));
@@ -247,6 +301,7 @@ async function handleApi(req, res, url, sessionUser) {
     }
     return json(res, 200, result);
   } catch (error) {
+    if (error instanceof HttpError) throw error;
     return json(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error) });
   }
 }
@@ -309,6 +364,9 @@ const server = http.createServer(async (req, res) => {
       const events = Array.isArray(body) ? body : [];
       return json(res, 200, { ok: true, stored: await appendTelemetry(events.slice(0, 500)) });
     }
+    if ((url.pathname === '/__telemetry/tail' || url.pathname === '/__telemetry/annotations') && !isLocalRequest(req)) {
+      return json(res, 403, { ok: false, error: 'forbidden' });
+    }
     if (url.pathname === '/__telemetry/tail') {
       const n = Math.min(Math.max(Number(url.searchParams.get('n') || 100), 1), 2000);
       let lines = [];
@@ -338,17 +396,8 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       return await nativeSelect(req, res, body);
     }
-    if (url.pathname === '/__native/open' && req.method === 'POST') {
-      if (!(await nativeAllowed(req))) return json(res, 200, { ok: false, error: 'native-unavailable' });
-      const body = await readBody(req);
-      const p = String(body?.path || '');
-      if (!p || !fsSync.existsSync(p)) return json(res, 200, { ok: false, error: 'Файлът не съществува на тази машина.' });
-      const child = spawn('cmd', ['/c', 'start', '""', p], { detached: true, stdio: 'ignore' });
-      child.unref();
-      return json(res, 200, { ok: true });
-    }
+    const uidFor = AUTH_ENABLED ? sessionUser : { user_id: 'local', name: 'локален' };
     if (url.pathname.startsWith('/api/')) {
-      const uidFor = AUTH_ENABLED ? sessionUser : { user_id: 'local', name: 'локален' };
       const boot = url.pathname === '/api/state' && url.searchParams.get('boot') === '1';
       return await queued(async () => {
         const sw = await service.switchUser(uidFor ? uidFor.user_id : 'local', boot);
@@ -356,9 +405,19 @@ const server = http.createServer(async (req, res) => {
         return await handleApi(req, res, url, uidFor);
       });
     }
-    if (url.pathname.startsWith('/__download/')) return await handleDownload(res, url);
+    if (url.pathname.startsWith('/__download/')) {
+      return await queued(async () => {
+        const sw = await service.switchUser(uidFor ? uidFor.user_id : 'local', false);
+        if (!sw.ok) return json(res, 409, { ok: false, error: sw.error });
+        return await handleDownload(res, url);
+      });
+    }
     return await handleStatic(res, url);
   } catch (error) {
+    if (error instanceof HttpError) {
+      res.setHeader('connection', 'close');
+      return json(res, error.status, { ok: false, error: error.message });
+    }
     return json(res, 500, { ok: false, error: String(error) });
   }
 });
