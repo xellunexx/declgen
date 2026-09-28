@@ -100,6 +100,94 @@ export async function dossierTexts(folder: string) {
   return out;
 }
 const cell = (s: string) => s.trim().replace(/\s+/g, ' ');
+interface Cell {
+  x0: number;
+  x1: number;
+  t: string;
+}
+interface CellLine {
+  y: number;
+  cells: Cell[];
+}
+const numericCell = (t: string) => /^[$€£]?-?[\d.,'’]*\d$/.test(t.trim());
+// A "data line" holds >=2 numeric cells (qty, price, HS, totals). Wrapped cell
+// text sits on its own y-lines with only name/description content — those are
+// continuations, not rows.
+const isDataLine = (line: CellLine) =>
+  line.cells.filter((c) => numericCell(c.t)).length >= 2;
+// Reassemble logical table rows: cells may wrap onto lines above and below the
+// data line (vertically centered cells). Between two data lines, earlier
+// continuation lines belong to the previous row's wrapped bottom, the last one
+// to the next row's wrapped top.
+export function logicalRows(lines: CellLine[]): string[][] {
+  const colStarts: number[] = [];
+  for (const l of lines)
+    for (const c of l.cells)
+      if (!colStarts.some((x) => Math.abs(x - c.x0) <= 8)) colStarts.push(c.x0);
+  colStarts.sort((a, b) => a - b);
+  const colOf = (x0: number) => {
+    let c = 0;
+    for (let i = 0; i < colStarts.length; i++)
+      if (colStarts[i] <= x0 + 2) c = i;
+    return c;
+  };
+  const rows: Map<number, string>[] = [];
+  let headerLines: CellLine[] = [],
+    pending: CellLine[] = [],
+    last: Map<number, string> | null = null;
+  const mergeInto = (
+    row: Map<number, string>,
+    line: CellLine,
+    first = false,
+  ) => {
+    for (const c of line.cells) {
+      const k = colOf(c.x0),
+        cur = row.get(k) ?? '';
+      row.set(k, cell(first ? `${c.t} ${cur}` : `${cur} ${c.t}`));
+    }
+  };
+  for (const line of lines) {
+    if (isDataLine(line)) {
+      const rowCols = new Set(line.cells.map((c) => colOf(c.x0)));
+      if (last && pending.length > 1) {
+        // all but the last continuation line close the previous row
+        for (const pl of pending.slice(0, -1)) mergeInto(last, pl);
+        pending = pending.slice(-1);
+      } else if (!last && pending.length) {
+        // Before the first data row, a pending line is a leading cell wrap only
+        // if it fills columns this row leaves empty; otherwise it's the header.
+        const tail = pending[pending.length - 1];
+        if (tail.cells.every((c) => !rowCols.has(colOf(c.x0)))) {
+          headerLines = pending.slice(0, -1);
+          pending = pending.slice(-1);
+        } else {
+          headerLines = pending;
+          pending = [];
+        }
+      }
+      const row = new Map<number, string>();
+      for (const pl of pending) mergeInto(row, pl, true);
+      mergeInto(row, line);
+      rows.push(row);
+      last = row;
+      pending = [];
+    } else pending.push(line);
+  }
+  if (last) for (const pl of pending) mergeInto(last, pl);
+  // Header: the contiguous run of text-only lines immediately above the first
+  // data row (document-header prose has no numbers but sits further away).
+  const ncol = Math.max(colStarts.length, ...rows.map((r) => r.size));
+  const firstRowY = lines.find((l) => isDataLine(l))?.y ?? 0;
+  const header = new Map<number, string>();
+  for (const hl of headerLines) {
+    if (hl.cells.some((c) => numericCell(c.t))) continue;
+    if (Math.abs(firstRowY - hl.y) > 40) continue;
+    mergeInto(header, hl);
+  }
+  const fill = (m: Map<number, string>) =>
+    Array.from({ length: ncol }, (_, i) => m.get(i) ?? '');
+  return [fill(header), ...rows.map(fill)];
+}
 export async function findTables(filePath: string) {
   const doc = await loadPdf(filePath),
     out: any[] = [];
@@ -115,35 +203,31 @@ export async function findTables(filePath: string) {
     }
     // Merge word chunks into cells: intra-cell gaps are word spacing (small),
     // inter-column gaps are wide. Letter-spaced PDFs otherwise emit a column per glyph.
-    const matrix = [...rows.entries()]
+    const matrix: CellLine[] = [...rows.entries()]
       .sort((a, b) => b[0] - a[0])
-      .map(([, a]) => {
-        const cells: string[] = [];
+      .map(([y, a]) => {
+        const cells: Cell[] = [];
         let cur: TextChunk | null = null;
         for (const ch of a.sort((x, y) => x.x - y.x)) {
           if (cur && ch.x - cur.end <= Math.max(4, ch.size * 0.6)) {
             cur.t += ' ' + ch.t;
             cur.end = Math.max(cur.end, ch.end);
           } else {
-            if (cur) cells.push(cell(cur.t));
+            if (cur) cells.push({ x0: cur.x, x1: cur.end, t: cell(cur.t) });
             cur = { ...ch };
           }
         }
-        if (cur) cells.push(cell(cur.t));
-        return cells;
-      })
-      .filter((r) => r.length >= 2);
-    if (matrix.length >= 3) {
-      const cols = Math.max(...matrix.map((r) => r.length));
-      const good = matrix.filter(
-        (r) => r.length >= Math.max(2, Math.floor(cols * 0.6)),
-      );
-      if (good.length >= 3) {
-        const header = good[0],
-          data = good.slice(1);
-        const md = `| ${header.join(' | ')} |\n| ${header.map(() => '---').join(' | ')} |\n${data.map((r) => `| ${r.join(' | ')} |`).join('\n')}`;
-        out.push({ page: n, header, rows: data, markdown: md });
-      }
+        if (cur) cells.push({ x0: cur.x, x1: cur.end, t: cell(cur.t) });
+        return { y, cells };
+      });
+    const grid = logicalRows(matrix);
+    const data = grid.slice(1).filter((r) => r.some((c) => c));
+    if (data.length >= 3) {
+      const header = grid[0].some((c) => c)
+        ? grid[0]
+        : grid[0].map((_, i) => `col${i + 1}`);
+      const md = `| ${header.join(' | ')} |\n| ${header.map(() => '---').join(' | ')} |\n${data.map((r) => `| ${r.join(' | ')} |`).join('\n')}`;
+      out.push({ page: n, header, rows: data, markdown: md });
     }
   }
   return out;

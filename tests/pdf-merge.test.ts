@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeTextItems } from '../core/pdf.js';
+import { mergeTextItems, logicalRows } from '../core/pdf.js';
 
 const item = (str: string, x: number, y: number, w = 3.35, size = 6.7) => ({
   str,
@@ -46,5 +46,53 @@ test('different y rows produce different chunks', () => {
   assert.deepEqual(
     chunks.map((c) => c.y),
     [800, 780],
+  );
+});
+
+// Regression: invoice/packing-list cells wrap across y-lines (vertically
+// centered cells put name text above AND below the data line). Without
+// reassembly the LLM saw 'pcs'/'200mm' as standalone rows.
+test('wrapped cell lines merge into their logical row', () => {
+  const L = (y: number, cells: [number, string][]) => ({
+    y,
+    cells: cells.map(([x0, t]) => ({ x0, x1: x0 + t.length * 3, t })),
+  });
+  const lines = [
+    L(810, [
+      [80, 'Roller for small'],
+      [150, 'steel and'],
+    ]),
+    L(800, [
+      [50, '6'],
+      [210, 'pcs'],
+      [240, '1'],
+      [270, '$385.0'],
+      [330, '4016991090'],
+    ]),
+    L(790, [
+      [80, 'pipes'],
+      [150, 'plastic'],
+    ]),
+    L(785, [
+      [80, 'Air Hose'],
+      [150, 'DN38'],
+    ]),
+    L(775, [
+      [50, '7'],
+      [210, 'pcs'],
+      [240, '2'],
+      [270, '$159.0'],
+      [330, '4016991090'],
+    ]),
+  ];
+  const grid = logicalRows(lines as any);
+  const [row6, row7] = grid.slice(1);
+  assert.equal(
+    row6.join(' | '),
+    '6 | Roller for small pipes | steel and plastic | pcs | 1 | $385.0 | 4016991090',
+  );
+  assert.equal(
+    row7.join(' | '),
+    '7 | Air Hose | DN38 | pcs | 2 | $159.0 | 4016991090',
   );
 });
