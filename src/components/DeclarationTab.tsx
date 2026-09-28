@@ -454,7 +454,50 @@ export function DeclarationTab({
 }) {
   const { fxRate, ak, bc, specAll, refs, prevDocType, prevDocRef } = params;
   const [showContext, setShowContext] = useState(false);
+  const [savingPrevDoc, setSavingPrevDoc] = useState(false);
   const goods = state.report?.goods_items || [];
+  const ctxDocs =
+    (state.declaration_context?.previous_documents as DocRow[]) || [];
+  const docType = prevDocType.trim().toUpperCase();
+  const savedDocRef = String(
+    ctxDocs.find((d) => String(d?.type || '').toUpperCase() === docType)
+      ?.referenceNumber || '',
+  );
+  const refConfirmed =
+    !!docType && !!prevDocRef.trim() && savedDocRef === prevDocRef.trim();
+  async function confirmPrevDoc() {
+    const ref = prevDocRef.trim();
+    if (!docType || !ref)
+      return window.alert(
+        'Въведете вид (N337) и референция от цесията — MRN / позиция.',
+      );
+    const next = structuredClone(
+      (state.declaration_context || {}) as Record<string, unknown>,
+    );
+    const docs = ((next.previous_documents as DocRow[]) || [])
+      .map((d) => ({
+        type: String(d?.type || '').trim().toUpperCase(),
+        referenceNumber: String(d?.referenceNumber || '').trim(),
+      }))
+      .filter((d) => d.type && d.type !== docType);
+    docs.push({ type: docType, referenceNumber: ref });
+    next.previous_documents = docs;
+    setSavingPrevDoc(true);
+    try {
+      const res = await declgenApi.saveH1Context(
+        next,
+        String(state.case_id || ''),
+        Number(state.case_revision || 0),
+      );
+      if (res.ok === false)
+        return window.alert(
+          res.error || 'Грешка при запис на предишен документ.',
+        );
+      await onStateRefresh();
+    } finally {
+      setSavingPrevDoc(false);
+    }
+  }
   return (
     <div className="stack gap-lg">
       <Card
@@ -520,7 +563,10 @@ export function DeclarationTab({
               към всички HS кодове
             </label>
           </Field>
-          <Field label="Предишен документ — вид">
+          <Field
+            label="Предишен документ — вид"
+            hint="N337 = декларация за временно складиране (цесия)"
+          >
             <input
               value={prevDocType}
               onChange={(e) =>
@@ -528,14 +574,42 @@ export function DeclarationTab({
               }
             />
           </Field>
-          <Field label="Предишен документ — референция (EX MRN / позиция)">
+          <Field
+            label="Предишен документ — референция (цесия MRN)"
+            hint="MRN / позиция от цесията на куриера, напр. 26BG005100713106U0 / 14"
+          >
             <input
               value={prevDocRef}
-              placeholder="напр. 26BG005100699433U4 / 13"
+              placeholder="напр. 26BG005100713106U0 / 14"
               onChange={(e) =>
                 onParamsChange({ ...params, prevDocRef: e.target.value })
               }
             />
+            <div className="inline">
+              <Button
+                kind={refConfirmed ? 'success' : 'primary'}
+                disabled={savingPrevDoc || refConfirmed || !prevDocRef.trim()}
+                onClick={(e) => {
+                  e.preventDefault();
+                  void confirmPrevDoc();
+                }}
+              >
+                {savingPrevDoc
+                  ? 'Запис…'
+                  : refConfirmed
+                    ? 'Потвърдено'
+                    : 'Потвърди'}
+              </Button>
+              {savedDocRef ? (
+                <Badge tone={refConfirmed ? 'success' : 'warning'}>
+                  {refConfirmed
+                    ? 'записано в случая'
+                    : `в случая: ${savedDocRef}`}
+                </Badge>
+              ) : (
+                <Badge tone="warning">не е записано</Badge>
+              )}
+            </div>
           </Field>
         </div>
         <div className="subsection-head">

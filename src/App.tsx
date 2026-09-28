@@ -54,14 +54,20 @@ const TABS: Array<[TabId, string]> = [
 function makeParams(
   state: ReturnType<typeof useDeclgen>['state'],
 ): BuildParams {
+  const ctxPrev = (
+    (state.declaration_context?.previous_documents as Array<{
+      type?: string;
+      referenceNumber?: string;
+    }>) || []
+  )[0];
   return {
     fxRate: String(state.fx_rate ?? ''),
     ak: String(state.ak_valuation ?? ''),
     bc: String(state.bc_valuation ?? ''),
     specAll: Boolean(state.spec_all ?? true),
     refs: structuredClone(state.spec_refs || []),
-    prevDocType: String(state.prev_doc_type ?? 'N337'),
-    prevDocRef: String(state.prev_doc_ref ?? ''),
+    prevDocType: String(state.prev_doc_type || ctxPrev?.type || 'N337'),
+    prevDocRef: String(state.prev_doc_ref || ctxPrev?.referenceNumber || ''),
     autoIdent: Boolean(state.auto_ident ?? true),
   };
 }
