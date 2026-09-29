@@ -368,3 +368,133 @@ test('human-verified catalog build has no classification placeholder', async () 
     false,
   );
 });
+
+test('static catalog descriptions cannot leak a previous shipment', async () => {
+  const cat = new Catalog([
+    {
+      key: 'botanicals',
+      aliases: [
+        'White Birch Extract',
+        'Dandelion Root Extract',
+        'Chamomile extract',
+        'Cinnamon Extract',
+        'Aged garlic extract',
+        'Nettle root Extract',
+      ],
+      bg_name: 'Екстракти',
+      hs: { hs6: '130219', cn: '70', taric: '00' },
+      origin: 'CN',
+      source: 'human_verified',
+      // Frozen text from an earlier case: 53,25 кг of white birch, dandelion,
+      // chamomile… — nothing like the lines in this shipment, but the fuzzy
+      // alias match still groups Cinnamon bark / Beet root / Garlic here.
+      declaration_description:
+        'Растителни екстракти за производството на хранителни добавки - 53,25 кг.\n/Бяла бреза, Глухарче, Лайка/',
+    },
+  ]);
+  const inv = {
+    ...invoice,
+    grand_total: 60,
+    total_goods_value: 60,
+    lines: [
+      {
+        no: 1,
+        description: 'Cinnamon bark Extract Cinnamon bark Extract',
+        hs_code: '1302199099',
+        quantity: 2,
+        unit: 'KG',
+        unit_price: 10,
+        total_amount: 20,
+        origin: 'CN',
+      },
+      {
+        no: 2,
+        description: 'Beet root Extract Beet root Extract',
+        hs_code: '1302199099',
+        quantity: 2,
+        unit: 'KG',
+        unit_price: 10,
+        total_amount: 20,
+        origin: 'CN',
+      },
+      {
+        no: 3,
+        description: 'Garlic Extract Garlic Extract',
+        hs_code: '1302199099',
+        quantity: 2,
+        unit: 'KG',
+        unit_price: 10,
+        total_amount: 20,
+        origin: 'CN',
+      },
+    ],
+  };
+  const [d] = await buildDeclaration(inv, template, cat, {
+    lrn: '26000000123456789H000001',
+    total_gross_kg: 6,
+  });
+  const item = d.GOODSSHIPMENT.GOODITEM[0];
+  const desc = item.Commodity.descriptionOfGoods;
+  const net = Number(item.Commodity.GOODSMEASURE.NetMassKg);
+  assert.equal(desc.includes('53,25'), false, 'stale mass leaked');
+  assert.equal(desc.includes('Бяла бреза'), false, 'stale product leaked');
+  assert.equal(
+    desc.includes('- 6 кг'),
+    true,
+    'desc mass must match emitted NetMassKg',
+  );
+  assert.ok(desc.includes('Cinnamon bark Extract'));
+  assert.ok(desc.includes('Beet root Extract'));
+  assert.ok(desc.includes('Garlic Extract'));
+  assert.equal(net, 6);
+});
+
+test('static descriptions stay verbatim when lines match the approved set', async () => {
+  const cat = new Catalog([
+    {
+      key: 'botanicals',
+      aliases: ['White Birch Extract', 'Dandelion Root Extract'],
+      bg_name: 'Екстракти',
+      hs: { hs6: '130219', cn: '70', taric: '00' },
+      origin: 'CN',
+      source: 'human_verified',
+      declaration_description:
+        'Растителни екстракти за производството на хранителни добавки - 6 кг.\n/Бяла бреза, Глухарче/',
+    },
+  ]);
+  const inv = {
+    ...invoice,
+    grand_total: 60,
+    total_goods_value: 60,
+    lines: [
+      {
+        no: 1,
+        description: 'White Birch Extract White Birch Extract',
+        hs_code: '1302199099',
+        quantity: 3,
+        unit: 'KG',
+        unit_price: 10,
+        total_amount: 30,
+        origin: 'CN',
+      },
+      {
+        no: 2,
+        description: 'Dandelion Root Extract Dandelion Root Extract',
+        hs_code: '1302199099',
+        quantity: 3,
+        unit: 'KG',
+        unit_price: 10,
+        total_amount: 30,
+        origin: 'CN',
+      },
+    ],
+  };
+  const [d] = await buildDeclaration(inv, template, cat, {
+    lrn: '26000000123456789H000001',
+    total_gross_kg: 6,
+  });
+  assert.equal(
+    d.GOODSSHIPMENT.GOODITEM[0].Commodity.descriptionOfGoods,
+    'Растителни екстракти за производството на хранителни добавки - 6 кг.\n/Бяла бреза, Глухарче/',
+  );
+});

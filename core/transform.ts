@@ -112,8 +112,60 @@ function partyFromInvoice(p: any, canonicalName = '', fieldMax: any = {}) {
   });
 }
 function dynamicDescription(entry: any, lines: any[], netKg: number) {
-  const template = String(entry?.declaration_description_template || '').trim();
-  if (!template) return String(entry?.declaration_description || '').trim();
+  const template = String(entry?.declaration_description_template || '').trim(),
+    aliases = (entry.aliases || [])
+      .map((a: any) => String(a || '').trim())
+      .filter(Boolean),
+    // A doubled line is the product name printed in both invoice columns
+    // ('Dandelion Root Extract Extract Dandelion Root Extract' = name + wrapped
+    // desc cell). The name reappears as the trailing words — find the longest
+    // word-run shared by the head and tail and keep it once. Then prefer the
+    // catalog alias spelling when it is the same name, so canonical phrasing
+    // survives; variants without an exact alias ('... subsp. infantis') keep
+    // their own text.
+    canonicalFor = (t: string) =>
+      aliases.find((a: string) => norm(a) === norm(t)) || t,
+    components = [
+      ...new Set(
+        lines
+          .map((l: any) => canonicalFor(edgeCollapse(clean(l.description))))
+          .filter(Boolean),
+      ),
+    ].join(', ');
+  if (!template) {
+    const staticDesc = String(entry?.declaration_description || '').trim();
+    if (!staticDesc || !lines.length) return staticDesc;
+    // A stored canonical description is frozen at approval time. On a new
+    // shipment the mass inside it and its product list must still describe
+    // the actual lines — never ship a stale figure or foreign products.
+    const net = String(Number(netKg.toFixed(3))).replace('.', ',');
+    let desc = staticDesc.replace(
+      /-\s*(\d[\d.,]*)\s*кг/gi,
+      (m: string, lit: string) =>
+        Math.abs(Number(lit.replace(',', '.')) - netKg) > 0.0005
+          ? `- ${net} кг`
+          : m,
+    );
+    const covered =
+      components &&
+      lines.every((l: any) => {
+        const nn = norm(edgeCollapse(clean(l.description)));
+        return (
+          !nn ||
+          aliases.some((a: string) => {
+            const an = norm(a);
+            return an === nn || nn.includes(an) || an.includes(nn);
+          }) ||
+          norm(staticDesc).includes(nn)
+        );
+      });
+    if (!covered) {
+      const listBlock = desc.match(/\/([^/]*,[^/]*)\//);
+      if (listBlock) desc = desc.replace(listBlock[0], `/${components}/`);
+      else if (components) desc = `${desc}\n/${components}/`;
+    }
+    return desc;
+  }
   const allKg =
     lines.length > 0 &&
     lines.every((l: any) =>
@@ -123,25 +175,6 @@ function dynamicDescription(entry: any, lines: any[], netKg: number) {
     ? lines.reduce((sum: number, l: any) => sum + num(l.qty ?? l.quantity), 0)
     : netKg;
   const net = String(Number(sourceNet.toFixed(3))).replace('.', ',');
-  // A doubled line is the product name printed in both invoice columns
-  // ('Dandelion Root Extract Extract Dandelion Root Extract' = name + wrapped
-  // desc cell). The name reappears as the trailing words — find the longest
-  // word-run shared by the head and tail and keep it once. Then prefer the
-  // catalog alias spelling when it is the same name, so canonical phrasing
-  // survives; variants without an exact alias ('... subsp. infantis') keep
-  // their own text.
-  const aliases = (entry.aliases || [])
-      .map((a: any) => String(a || '').trim())
-      .filter(Boolean),
-    canonicalFor = (t: string) =>
-      aliases.find((a: string) => norm(a) === norm(t)) || t;
-  const components = [
-    ...new Set(
-      lines
-        .map((l: any) => canonicalFor(edgeCollapse(clean(l.description))))
-        .filter(Boolean),
-    ),
-  ].join(', ');
   return template
     .replaceAll('{net_kg}', net)
     .replaceAll('{components}', components);
@@ -527,6 +560,11 @@ export async function buildDeclaration(
         clean(
           entry.bg_name || g.lines.map((l: any) => l.description).join('; '),
         ),
+      staticDescAdjusted =
+        !hasDynamicTemplate &&
+        canonicalDescription &&
+        canonicalDescription !==
+          String(entry.declaration_description || '').trim(),
       phrase = canonicalDescription ? '' : clean(entry.bg_phrase),
       maxDesc =
         Number(template?.canonical_h1?.max_description_length) ||
@@ -539,6 +577,10 @@ export async function buildDeclaration(
         StatisticalValue: f2(stat),
       });
     it.Commodity.descriptionOfGoods = desc;
+    if (staticDescAdjusted)
+      warnings.push(
+        `позиция ${i + 1}: каталожното описание съдържаше данни от друга пратка (тегло/съставки) — пренаписано по редовете на тази фактура, проверете го`,
+      );
     if (descFull.length > maxDesc)
       warnings.push(
         `позиция ${i + 1}: описанието е ${descFull.length} символа > ${maxDesc} — съкратено до максимума, проверете загубения текст`,
