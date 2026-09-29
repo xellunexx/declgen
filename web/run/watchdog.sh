@@ -13,7 +13,7 @@ WLOG=web/run/watchdog.log
 URL_FILE=web/run/current_url.txt
 
 update_wan() {
-  node -e "require('fs').writeFileSync('declgen-data/wan.json', JSON.stringify({url:process.argv[1],target:'http://127.0.0.1:$PORT',ts:new Date().toISOString()},null,2))" "$1"
+  node -e "require('fs').writeFileSync(process.argv[2]+'/wan.json', JSON.stringify({url:process.argv[1],target:'http://127.0.0.1:$PORT',ts:new Date().toISOString()},null,2))" "$1" "${DECLGEN_DATA_ROOT:-$HOME/.declgen-data}"
   echo "$1" > "$URL_FILE"
   echo "$(date -Is) tunnel url -> $1" >> "$WLOG"
 }

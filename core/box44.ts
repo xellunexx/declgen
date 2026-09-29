@@ -1,11 +1,90 @@
 export class Box44Error extends Error {}
-export const CLASS_CODES:Record<string,[string|null,'item'|'consignment']>={invoice:['N380','item'],proforma:['N325','item'],packing_list:['N271','consignment'],waybill:[null,'consignment'],permit:['1999','item'],certificate:['1999','item']};
-const WAYBILL_BY_HINT:Record<string,string>={rail:'N703',cim:'N703',smgs:'N703',sea:'N705','b/l':'N705',bl:'N705','bill of lading':'N705',cmr:'N730',road:'N730',awb:'N741',air:'N741',airway:'N741',master:'N740'};
-export function ddmmyyyy(s:string){ if(!s)throw new Box44Error('document reference needs a date'); let m=s.match(/^(\d{4})-(\d{2})-(\d{2})$/); if(m)return `${m[3]}${m[2]}${m[1]}`; m=s.match(/^(\d{2})[.\-/](\d{2})[.\-/](\d{4})$/); if(m)return `${m[1]}${m[2]}${m[3]}`; m=s.match(/^(\d{4})(\d{2})(\d{2})$/); if(m)return `${m[3]}${m[2]}${m[1]}`; throw new Box44Error(`unparseable document date: ${JSON.stringify(s)}`); }
-export const refInvoice=(n:string,d:string)=>{if(!n)throw new Box44Error('invoice reference needs a number');return{type:'N380',referenceNumber:`${String(n).trim()}/${ddmmyyyy(d)}`}};
-export const refProforma=(n:string,d:string)=>{if(!n)throw new Box44Error('proforma reference needs a number');return{type:'N325',referenceNumber:`${String(n).trim()}/${ddmmyyyy(d)}`}};
-export const refPacking=(d:string,count=1)=>({type:'N271',referenceNumber:`${count} БР/${ddmmyyyy(d)}`});
-export function refWaybill(n:string,hint=''){if(!n)throw new Box44Error('waybill reference needs a number'); const h=hint.toLowerCase(); const k=Object.keys(WAYBILL_BY_HINT).find(x=>h.includes(x)); return{type:k?WAYBILL_BY_HINT[k]:'N730',referenceNumber:String(n).trim()};}
-export const refCertificate=(label:string)=>{if(!label)throw new Box44Error('1999 attachment needs a label');return{type:'1999',referenceNumber:label.trim().toUpperCase()}};
-export function classifyToBox44(classification:string,o:{number?:string,date?:string,mode_hint?:string,label?:string,count?:number}={}){ const [code,level]=CLASS_CODES[classification]??['1999','item']; if(classification==='invoice'||code==='N380')return{level,spec:refInvoice(o.number??'',o.date??'')}; if(classification==='proforma')return{level,spec:refProforma(o.number??'',o.date??'')}; if(classification==='packing_list')return{level,spec:refPacking(o.date??'',o.count??1)}; if(classification==='waybill')return{level,spec:refWaybill(o.number??'',o.mode_hint??'')}; return{level,spec:refCertificate(o.label||o.number||'ДОКУМЕНТ')}; }
-export const STATUS_PLACEHOLDER='НЕ ПОПАДА';
+export const CLASS_CODES: Record<
+  string,
+  [string | null, 'item' | 'consignment']
+> = {
+  invoice: ['N380', 'item'],
+  proforma: ['N325', 'item'],
+  packing_list: ['N271', 'consignment'],
+  waybill: [null, 'consignment'],
+  permit: ['1999', 'item'],
+  certificate: ['1999', 'item'],
+};
+const WAYBILL_BY_HINT: Record<string, string> = {
+  rail: 'N703',
+  cim: 'N703',
+  smgs: 'N703',
+  sea: 'N705',
+  'b/l': 'N705',
+  bl: 'N705',
+  'bill of lading': 'N705',
+  cmr: 'N730',
+  road: 'N730',
+  awb: 'N741',
+  air: 'N741',
+  airway: 'N741',
+  master: 'N740',
+};
+export function ddmmyyyy(s: string) {
+  if (!s) throw new Box44Error('document reference needs a date');
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) return `${m[3]}${m[2]}${m[1]}`;
+  m = s.match(/^(\d{2})[.\-/](\d{2})[.\-/](\d{4})$/);
+  if (m) return `${m[1]}${m[2]}${m[3]}`;
+  m = s.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (m) return `${m[3]}${m[2]}${m[1]}`;
+  throw new Box44Error(`unparseable document date: ${JSON.stringify(s)}`);
+}
+export const refInvoice = (n: string, d: string) => {
+  if (!n) throw new Box44Error('invoice reference needs a number');
+  return {
+    type: 'N380',
+    referenceNumber: `${String(n).trim()}/${ddmmyyyy(d)}`,
+  };
+};
+export const refProforma = (n: string, d: string) => {
+  if (!n) throw new Box44Error('proforma reference needs a number');
+  return {
+    type: 'N325',
+    referenceNumber: `${String(n).trim()}/${ddmmyyyy(d)}`,
+  };
+};
+export const refPacking = (d: string, count = 1) => ({
+  type: 'N271',
+  referenceNumber: `${count} БР/${ddmmyyyy(d)}`,
+});
+export function refWaybill(n: string, hint = '') {
+  if (!n) throw new Box44Error('waybill reference needs a number');
+  const h = hint.toLowerCase();
+  const k = Object.keys(WAYBILL_BY_HINT).find((x) => h.includes(x));
+  return {
+    type: k ? WAYBILL_BY_HINT[k] : 'N730',
+    referenceNumber: String(n).trim(),
+  };
+}
+export const refCertificate = (label: string) => {
+  if (!label) throw new Box44Error('1999 attachment needs a label');
+  return { type: '1999', referenceNumber: label.trim().toUpperCase() };
+};
+export function classifyToBox44(
+  classification: string,
+  o: {
+    number?: string;
+    date?: string;
+    mode_hint?: string;
+    label?: string;
+    count?: number;
+  } = {},
+) {
+  const [code, level] = CLASS_CODES[classification] ?? ['1999', 'item'];
+  if (classification === 'invoice' || code === 'N380')
+    return { level, spec: refInvoice(o.number ?? '', o.date ?? '') };
+  if (classification === 'proforma')
+    return { level, spec: refProforma(o.number ?? '', o.date ?? '') };
+  if (classification === 'packing_list')
+    return { level, spec: refPacking(o.date ?? '', o.count ?? 1) };
+  if (classification === 'waybill')
+    return { level, spec: refWaybill(o.number ?? '', o.mode_hint ?? '') };
+  return { level, spec: refCertificate(o.label || o.number || 'ДОКУМЕНТ') };
+}
+export const STATUS_PLACEHOLDER = 'НЕ ПОПАДА';

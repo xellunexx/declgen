@@ -37,22 +37,22 @@ React is deliberately downstream of the state engine. Polling can refresh views,
 
 ## Major source-to-TypeScript mappings
 
-| Python concern | TypeScript implementation |
-| --- | --- |
-| PyQt `MainWindow` mutable state | `DeclgenService` + `CaseState`; React stores drafts/views only |
-| `QThread` task UI | service task state + cooperative cancellation + revision-aware polling |
-| `QFileDialog` | Electron native picker + main-process grants |
-| dossier extraction | `core/pdf.ts`, `tabular.ts`, `extract.ts`, `vision.ts`, service orchestration |
-| packing reconciliation | `core/packing.ts` |
-| client/catalog persistence | `core/clients.ts`, `catalog.ts` |
-| classification decisions | `core/classification-review.ts` + canonical revision bump |
-| H1 context | `core/declaration-context.ts` + one canonical context writer |
-| BNB FX | `core/fx.ts` |
-| conformance | `core/conformance.ts`, `conformance-ex.ts` |
-| BG415A/BG515C models/XML | `core/model.ts`, `xmlio.ts`, `bg515c.ts` |
-| audit/TRACE/case package | `core/workflow.ts`, `report.ts` |
-| LLM/vision/TARIC | `core/llm.ts`, `vision.ts`, `taric.ts` |
-| approval copy to Alpha | transactional preparation + frozen snapshot + final copy + frozen live state |
+| Python concern                  | TypeScript implementation                                                     |
+| ------------------------------- | ----------------------------------------------------------------------------- |
+| PyQt `MainWindow` mutable state | `DeclgenService` + `CaseState`; React stores drafts/views only                |
+| `QThread` task UI               | service task state + cooperative cancellation + revision-aware polling        |
+| `QFileDialog`                   | Electron native picker + main-process grants                                  |
+| dossier extraction              | `core/pdf.ts`, `tabular.ts`, `extract.ts`, `vision.ts`, service orchestration |
+| packing reconciliation          | `core/packing.ts`                                                             |
+| client/catalog persistence      | `core/clients.ts`, `catalog.ts`                                               |
+| classification decisions        | `core/classification-review.ts` + canonical revision bump                     |
+| H1 context                      | `core/declaration-context.ts` + one canonical context writer                  |
+| BNB FX                          | `core/fx.ts`                                                                  |
+| conformance                     | `core/conformance.ts`, `conformance-ex.ts`                                    |
+| BG415A/BG515C models/XML        | `core/model.ts`, `xmlio.ts`, `bg515c.ts`                                      |
+| audit/TRACE/case package        | `core/workflow.ts`, `report.ts`                                               |
+| LLM/vision/TARIC                | `core/llm.ts`, `vision.ts`, `taric.ts`                                        |
+| approval copy to Alpha          | transactional preparation + frozen snapshot + final copy + frozen live state  |
 
 ## Reconstructed modules
 
@@ -95,8 +95,6 @@ The approved snapshot is built from a separate frozen state copy, so a failed fi
 
 ## Remaining qualification work
 
-- Generate and commit `package-lock.json` on a networked workstation; the generation environment could not reach npm reliably.
-- Run dependency-aware `npm run typecheck`, `npm test`, `npm run build` after `npm ci`.
 - Launch Electron on Windows and exercise native dialogs, local LLM process control and Alpha export.
 - Run real UI accessibility/UX walkthroughs (keyboard, zoom, table overflow, screen-reader labels).
 - Compare reconstructed import/export transforms against a representative set of known-good declarations and expected XML.

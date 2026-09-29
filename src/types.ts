@@ -1,4 +1,10 @@
-export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
+export type Json =
+  | null
+  | boolean
+  | number
+  | string
+  | Json[]
+  | { [key: string]: Json };
 
 export interface ApiResult {
   ok?: boolean;
@@ -62,7 +68,6 @@ export interface SpecRef {
   reference?: string;
 }
 
-
 export interface Readiness {
   ready: boolean;
   blockers: string[];
@@ -100,6 +105,17 @@ export interface AppState {
   bc_valuation?: string | number;
   spec_all?: boolean;
   spec_refs?: SpecRef[];
+  prev_doc_type?: string;
+  prev_doc_ref?: string;
+  cession?: {
+    mrn_item?: string | null;
+    waybill_number?: string | null;
+    arrival_id?: string | null;
+    arrival_code?: string | null;
+    pieces?: number | null;
+    gross_kg?: number | null;
+    recipient?: string | null;
+  } | null;
   general_submitted?: boolean;
   declaration_context?: Record<string, unknown>;
   wan_status?: string;
@@ -113,11 +129,35 @@ export interface Dashboard {
   case_revision?: number;
   readiness?: Readiness;
   client?: { name?: string; eori?: string };
-  dossier?: { files_count?: number; invoices?: number; packings?: number; waybills?: number };
-  invoice?: { number?: string; date?: string; lines_count?: number; seller?: string; grand_total?: string | number; currency?: string };
+  dossier?: {
+    files_count?: number;
+    invoices?: number;
+    packings?: number;
+    waybills?: number;
+  };
+  invoice?: {
+    number?: string;
+    date?: string;
+    lines_count?: number;
+    seller?: string;
+    grand_total?: string | number;
+    currency?: string;
+  };
   declaration?: Record<string, unknown>;
-  reconciliation?: Array<{ metric?: string; source?: string; decl?: string; diff?: string; ok?: boolean }>;
-  changes?: Array<{ line_no?: string | number; inv_hs?: string; decl_hs?: string; reason?: string; desc?: string }>;
+  reconciliation?: Array<{
+    metric?: string;
+    source?: string;
+    decl?: string;
+    diff?: string;
+    ok?: boolean;
+  }>;
+  changes?: Array<{
+    line_no?: string | number;
+    inv_hs?: string;
+    decl_hs?: string;
+    reason?: string;
+    desc?: string;
+  }>;
   blockers?: string[];
   warnings?: string[];
   [key: string]: unknown;
@@ -224,5 +264,33 @@ export interface ProfileInspectResult {
   [key: string]: unknown;
 }
 
-export interface HistoryListItem { id: string; saved_at: string; client_id: string; invoice_number: string | null; direction: string; totals?: { invoiced?: string | null; currency?: string; net_kg?: string | null; gross_kg?: string | null; packages?: string | null }; items_count: number }
-export interface HistorySnapshot extends HistoryListItem { user_name?: string; case_revision?: number; files?: string[]; items?: Array<{ item_no?: string; hs_code?: string; description?: string; net_kg?: string; price?: string; statistical_value?: string; origin?: string }>; xml?: string | null }
+export interface HistoryListItem {
+  id: string;
+  saved_at: string;
+  client_id: string;
+  invoice_number: string | null;
+  direction: string;
+  totals?: {
+    invoiced?: string | null;
+    currency?: string;
+    net_kg?: string | null;
+    gross_kg?: string | null;
+    packages?: string | null;
+  };
+  items_count: number;
+}
+export interface HistorySnapshot extends HistoryListItem {
+  user_name?: string;
+  case_revision?: number;
+  files?: string[];
+  items?: Array<{
+    item_no?: string;
+    hs_code?: string;
+    description?: string;
+    net_kg?: string;
+    price?: string;
+    statistical_value?: string;
+    origin?: string;
+  }>;
+  xml?: string | null;
+}

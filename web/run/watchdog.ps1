@@ -21,7 +21,7 @@ $origin = 'http://127.0.0.1:48913'
 $env:DECLGEN_WEB_HOST = '127.0.0.1'
 $env:DECLGEN_WEB_PORT = '48913'
 $env:DECLGEN_AUTH = 'on'
-$env:DECLGEN_DATA_ROOT = Join-Path $root 'declgen-data'
+$env:DECLGEN_DATA_ROOT = Join-Path $env:USERPROFILE '.declgen-data'
 function Log($message) { Add-Content -LiteralPath "$PSScriptRoot/watchdog-windows.log" -Value "$(Get-Date -Format o) $message" }
 function Healthy {
     try { return (Invoke-RestMethod "$origin/__health" -TimeoutSec 10).ok -eq $true } catch { return $false }
@@ -53,7 +53,7 @@ function Save-Url {
     $utf8 = New-Object Text.UTF8Encoding($false)
     [IO.File]::WriteAllText("$PSScriptRoot/current_url.txt", $url, $utf8)
     $wan = @{url=$url;target=$origin;ts=(Get-Date).ToUniversalTime().ToString('o')} | ConvertTo-Json
-    [IO.File]::WriteAllText("$root/declgen-data/wan.json", $wan, $utf8)
+    [IO.File]::WriteAllText((Join-Path $env:DECLGEN_DATA_ROOT 'wan.json'), $wan, $utf8)
     $script:lastUrl = $url
     Log "Public URL: $url"
 }

@@ -1,24 +1,264 @@
-import fs from 'node:fs/promises'; import fsSync from 'node:fs'; import path from 'node:path'; import { spawn, execFile } from 'node:child_process'; import { promisify } from 'node:util'; import { randomUUID } from 'node:crypto';
-import { CaseState, buildSnapshot, fingerprint } from '../../core/case-state.js'; import { Catalog } from '../../core/catalog.js'; import * as clients from '../../core/clients.js'; import * as review from '../../core/classification-review.js'; import * as pdf from '../../core/pdf.js'; import * as tabular from '../../core/tabular.js'; import * as extract from '../../core/extract.js'; import * as packingMod from '../../core/packing.js'; import * as dossierMod from '../../core/dossier.js'; import * as fx from '../../core/fx.js'; import * as general from '../../core/general-intake.js'; import * as transform from '../../core/transform.js'; import * as transformEx from '../../core/transform-ex.js'; import * as conformance from '../../core/conformance.js'; import * as conformanceEx from '../../core/conformance-ex.js'; import * as xmlio from '../../core/xmlio.js'; import * as bg515c from '../../core/bg515c.js'; import * as workflow from '../../core/workflow.js'; import * as reportMod from '../../core/report.js'; import * as profileImport from '../../core/profile-import.js'; import * as llm from '../../core/llm.js'; import * as vision from '../../core/vision.js'; import * as taric from '../../core/taric.js'; import { resolve as resolveContext } from '../../core/declaration-context.js'; import { runsDir, dataRoot, catalogDir } from '../../core/paths.js';
-const execFileP=promisify(execFile); const allowedExt=new Set(['.pdf','.csv','.xml','.xlsx']);
+import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
+import path from 'node:path';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { randomUUID } from 'node:crypto';
+import {
+  CaseState,
+  buildSnapshot,
+  fingerprint,
+} from '../../core/case-state.js';
+import { Catalog, productKey } from '../../core/catalog.js';
+import * as clients from '../../core/clients.js';
+import * as review from '../../core/classification-review.js';
+import * as pdf from '../../core/pdf.js';
+import * as tabular from '../../core/tabular.js';
+import * as extract from '../../core/extract.js';
+import * as packingMod from '../../core/packing.js';
+import * as dossierMod from '../../core/dossier.js';
+import * as fx from '../../core/fx.js';
+import * as general from '../../core/general-intake.js';
+import * as transform from '../../core/transform.js';
+import * as transformEx from '../../core/transform-ex.js';
+import * as conformance from '../../core/conformance.js';
+import * as conformanceEx from '../../core/conformance-ex.js';
+import * as xmlio from '../../core/xmlio.js';
+import * as bg515c from '../../core/bg515c.js';
+import * as workflow from '../../core/workflow.js';
+import * as reportMod from '../../core/report.js';
+import * as profileImport from '../../core/profile-import.js';
+import * as llm from '../../core/llm.js';
+import * as vision from '../../core/vision.js';
+import * as taric from '../../core/taric.js';
+import { resolve as resolveContext } from '../../core/declaration-context.js';
+import { runsDir, dataRoot, catalogDir } from '../../core/paths.js';
+const execFileP = promisify(execFile);
+const allowedExt = new Set(['.pdf', '.csv', '.xml', '.xlsx']);
 // Typed/pasted paths (web surface, Windows "Copy as path") arrive wrapped in quotes.
-function normalizeInputPath(p:unknown):string{let s=String(p??'').trim();while(s.length>=2&&((s.startsWith('"')&&s.endsWith('"'))||(s.startsWith("'")&&s.endsWith("'"))))s=s.slice(1,-1).trim();return s}
-function safe(v:any,f='draft'){return(String(v??'').trim().replace(/[<>:"/\\|?*\x00-\x1f]+/g,'-').replace(/\s+/g,'-').replace(/-{2,}/g,'-').replace(/^[. -]+|[. -]+$/g,'').slice(0,90)||f)}
-function deepEqual(a:any,b:any){return JSON.stringify(a)===JSON.stringify(b)} const clone=<T>(x:T):T=>structuredClone(x);
-function isFreightInvoice(invoice:any){const lines=Array.isArray(invoice?.lines)?invoice.lines:[];const words=lines.map((line:any)=>String(line?.description||'')).join(' ').toLowerCase();return lines.length===1&&/(?:freight|transport|навло|превоз)/i.test(words)&&Number(invoice?.shipping_cost||0)>0}
-interface Log{ id:number; ts:string; level:string; text:string }
-interface Persisted{version:number;caseId?:string;clientId:string;direction:'IM'|'EX';sourceFiles:string[];selectedFolder:string;dossier:any;invoiceRaw:any;invoice:any;invoiceName:string|null;packing:any;waybill:any;fxInfo:any;declarationContext:any;classificationDecisions:any;buildParams:any;generalSubmitted:any;generalAudit:any;generalExtras:any;report:any;issues:any[];decl:any;declEx:any;xml:string;trace:any;caseState:any;caseTemplate:any;caseCatalogEntries:any[];lastRunDir:string|null;casePackage:string|null;intakeClientId:string|null}
-export class DeclgenService{
-  caseId=randomUUID(); clientId=general.NEW_CLIENT_LABEL; direction:'IM'|'EX'='IM'; sourceFiles:string[]=[]; selectedFolder=''; dossier:any={}; invoiceRaw:any=null; invoice:any=null; invoiceName:string|null=null; packing:any=null; waybill:any=null; fxInfo:any=null; declarationContext:any={}; classificationDecisions:Record<string,any>={}; buildParams:any={fx_rate:'',ak_valuation:'',bc_valuation:'',auto_ident:true,spec_all:true,spec_refs:[]}; generalSubmitted:any=null; generalAudit:any=null; generalExtras:any={}; report:any={}; issues:any[]=[]; decl:any=null; declEx:any=null; xml=''; trace:any={}; case=new CaseState(); caseTemplate:any=null; intakeClientId:string|null=null; caseCatalog=new Catalog(); lastRunDir:string|null=null; casePackage:string|null=null; task={active:null as string|null,progress:'',status:'idle',error:''}; logs:Log[]=[]; logSeq=0; cancelRequested=false;
-  constructor(public alphaExports=process.platform==='win32'?String.raw`C:\alpha\exports`:path.join(dataRoot(),'alpha-exports')){}
+function normalizeInputPath(p: unknown): string {
+  let s = String(p ?? '').trim();
+  while (
+    s.length >= 2 &&
+    ((s.startsWith('"') && s.endsWith('"')) ||
+      (s.startsWith("'") && s.endsWith("'")))
+  )
+    s = s.slice(1, -1).trim();
+  return s;
+}
+function safe(v: any, f = 'draft') {
+  return (
+    String(v ?? '')
+      .trim()
+      .replace(/[<>:"/\\|?*\x00-\x1f]+/g, '-')
+      .replace(/\s+/g, '-')
+      .replace(/-{2,}/g, '-')
+      .replace(/^[. -]+|[. -]+$/g, '')
+      .slice(0, 90) || f
+  );
+}
+const canon = (x: any): any =>
+  Array.isArray(x)
+    ? x.map(canon)
+    : x && typeof x === 'object'
+      ? Object.fromEntries(
+          Object.keys(x)
+            .sort()
+            .map((k) => [k, canon(x[k])]),
+        )
+      : x;
+function deepEqual(a: any, b: any) {
+  return JSON.stringify(canon(a)) === JSON.stringify(canon(b));
+}
+const clone = <T>(x: T): T => structuredClone(x);
+function isFreightInvoice(invoice: any) {
+  const lines = Array.isArray(invoice?.lines) ? invoice.lines : [];
+  const words = lines
+    .map((line: any) => String(line?.description || ''))
+    .join(' ')
+    .toLowerCase();
+  return (
+    lines.length === 1 &&
+    /(?:freight|transport|навло|превоз)/i.test(words) &&
+    Number(invoice?.shipping_cost || 0) > 0
+  );
+}
+interface Log {
+  id: number;
+  ts: string;
+  level: string;
+  text: string;
+}
+interface Persisted {
+  version: number;
+  caseId?: string;
+  clientId: string;
+  direction: 'IM' | 'EX';
+  sourceFiles: string[];
+  selectedFolder: string;
+  dossier: any;
+  invoiceRaw: any;
+  invoice: any;
+  invoiceName: string | null;
+  packing: any;
+  waybill: any;
+  cession: any;
+  fxInfo: any;
+  declarationContext: any;
+  classificationDecisions: any;
+  buildParams: any;
+  generalSubmitted: any;
+  generalAudit: any;
+  generalExtras: any;
+  report: any;
+  issues: any[];
+  decl: any;
+  declEx: any;
+  xml: string;
+  trace: any;
+  caseState: any;
+  caseTemplate: any;
+  caseCatalogEntries: any[];
+  lastRunDir: string | null;
+  casePackage: string | null;
+  intakeClientId: string | null;
+}
+export class DeclgenService {
+  caseId = randomUUID();
+  clientId = general.NEW_CLIENT_LABEL;
+  direction: 'IM' | 'EX' = 'IM';
+  sourceFiles: string[] = [];
+  selectedFolder = '';
+  dossier: any = {};
+  invoiceRaw: any = null;
+  invoice: any = null;
+  invoiceName: string | null = null;
+  packing: any = null;
+  waybill: any = null;
+  cession: any = null;
+  fxInfo: any = null;
+  declarationContext: any = {};
+  classificationDecisions: Record<string, any> = {};
+  buildParams: any = {
+    fx_rate: '',
+    ak_valuation: '',
+    bc_valuation: '',
+    auto_ident: true,
+    spec_all: true,
+    spec_refs: [],
+    prev_doc_type: 'N337',
+    prev_doc_ref: '',
+    case_lrn: '',
+  };
+  generalSubmitted: any = null;
+  generalAudit: any = null;
+  generalExtras: any = {};
+  report: any = {};
+  issues: any[] = [];
+  decl: any = null;
+  declEx: any = null;
+  xml = '';
+  trace: any = {};
+  case = new CaseState();
+  caseTemplate: any = null;
+  intakeClientId: string | null = null;
+  caseCatalog = new Catalog();
+  lastRunDir: string | null = null;
+  casePackage: string | null = null;
+  task = {
+    active: null as string | null,
+    progress: '',
+    status: 'idle',
+    error: '',
+  };
+  logs: Log[] = [];
+  logSeq = 0;
+  cancelRequested = false;
+  constructor(
+    public alphaExports = process.platform === 'win32'
+      ? String.raw`C:\alpha\exports`
+      : path.join(dataRoot(), 'alpha-exports'),
+  ) {}
   // Case-state ownership: 'local' = desktop/detached web (legacy active-case.json); any web account id = active-case.<id>.json. null = unbound (auth-on boot before first request) — persists are refused.
-  _owner:string|null='local';
-  _pristine=false; // true right after a bind/bench until the first mutating persist; swap-out skips persisting pristine benches (never clobber a declined-restore file)
-  static safeOwner(u:unknown){return String(u??'').trim().toLowerCase().replace(/[^a-zа-я0-9_-]+/gi,'_').replace(/^_+|_+$/g,'').slice(0,32)}
-  get activePath(){const o=this._owner===null||this._owner==='local'?null:DeclgenService.safeOwner(this._owner);return path.join(dataRoot(),o?`active-case.${o}.json`:'active-case.json')}
-  log(text:string,level='info'){this.logs.push({id:++this.logSeq,ts:new Date().toLocaleTimeString('bg-BG',{hour12:false}),level,text});if(this.logs.length>3000)this.logs.splice(0,this.logs.length-3000)}
-  async init(){await fs.mkdir(dataRoot(),{recursive:true});await fs.mkdir(runsDir(),{recursive:true});try{const p=JSON.parse(await fs.readFile(this.activePath,'utf8')) as Persisted;if(p?.version===2||p?.version===3){this.applyPersisted(p);this.log(`възстановен активен случай: ${this.clientId}, rev ${this.case.case_revision}`)}}catch{} }
-  applyPersisted(p:Persisted){Object.assign(this,{caseId:p.caseId||randomUUID(),clientId:p.clientId,direction:p.direction,sourceFiles:p.sourceFiles||[],selectedFolder:p.selectedFolder||'',dossier:p.dossier||{},invoiceRaw:p.invoiceRaw||null,invoice:p.invoice||null,invoiceName:p.invoiceName||null,packing:p.packing||null,waybill:p.waybill||null,fxInfo:p.fxInfo||null,declarationContext:p.declarationContext||{},classificationDecisions:p.classificationDecisions||{},buildParams:p.buildParams||this.buildParams,generalSubmitted:p.generalSubmitted||null,generalAudit:p.generalAudit||null,generalExtras:p.generalExtras||{},report:p.report||{},issues:p.issues||[],decl:p.decl||null,declEx:p.declEx||null,xml:p.xml||'',trace:p.trace||{},lastRunDir:p.lastRunDir||null,casePackage:p.casePackage||null});this.case=new CaseState(p.caseState);this.caseTemplate=p.caseTemplate||null;this.intakeClientId=p.intakeClientId||null;this.caseCatalog=new Catalog(p.caseCatalogEntries||[])}
+  _owner: string | null = 'local';
+  _pristine = false; // true right after a bind/bench until the first mutating persist; swap-out skips persisting pristine benches (never clobber a declined-restore file)
+  static safeOwner(u: unknown) {
+    return String(u ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-zа-я0-9_-]+/gi, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 32);
+  }
+  get activePath() {
+    const o =
+      this._owner === null || this._owner === 'local'
+        ? null
+        : DeclgenService.safeOwner(this._owner);
+    return path.join(
+      dataRoot(),
+      o ? `active-case.${o}.json` : 'active-case.json',
+    );
+  }
+  log(text: string, level = 'info') {
+    this.logs.push({
+      id: ++this.logSeq,
+      ts: new Date().toLocaleTimeString('bg-BG', { hour12: false }),
+      level,
+      text,
+    });
+    if (this.logs.length > 3000) this.logs.splice(0, this.logs.length - 3000);
+  }
+  async init() {
+    await fs.mkdir(dataRoot(), { recursive: true });
+    await fs.mkdir(runsDir(), { recursive: true });
+    try {
+      const p = JSON.parse(
+        await fs.readFile(this.activePath, 'utf8'),
+      ) as Persisted;
+      if (p?.version === 2 || p?.version === 3) {
+        this.applyPersisted(p);
+        this.log(
+          `възстановен активен случай: ${this.clientId}, rev ${this.case.case_revision}`,
+        );
+      }
+    } catch {}
+  }
+  applyPersisted(p: Persisted) {
+    Object.assign(this, {
+      caseId: p.caseId || randomUUID(),
+      clientId: p.clientId,
+      direction: p.direction,
+      sourceFiles: p.sourceFiles || [],
+      selectedFolder: p.selectedFolder || '',
+      dossier: p.dossier || {},
+      invoiceRaw: p.invoiceRaw || null,
+      invoice: p.invoice || null,
+      invoiceName: p.invoiceName || null,
+      packing: p.packing || null,
+      waybill: p.waybill || null,
+      cession: p.cession || null,
+      fxInfo: p.fxInfo || null,
+      declarationContext: p.declarationContext || {},
+      classificationDecisions: p.classificationDecisions || {},
+      buildParams: { case_lrn: '', ...(p.buildParams || this.buildParams) },
+      generalSubmitted: p.generalSubmitted || null,
+      generalAudit: p.generalAudit || null,
+      generalExtras: p.generalExtras || {},
+      report: p.report || {},
+      issues: p.issues || [],
+      decl: p.decl || null,
+      declEx: p.declEx || null,
+      xml: p.xml || '',
+      trace: p.trace || {},
+      lastRunDir: p.lastRunDir || null,
+      casePackage: p.casePackage || null,
+    });
+    this.case = new CaseState(p.caseState);
+    this.caseTemplate = p.caseTemplate || null;
+    this.intakeClientId = p.intakeClientId || null;
+    this.caseCatalog = new Catalog(p.caseCatalogEntries || []);
+  }
   // Account swap for the web surface. Contract (2026-09-10, user-mandated):
   //  • PAGE (RE)LOAD (boot=true): clean bench, unless this account touched real work within the
   //    last 10 minutes (a quick F5 shouldn't nuke a live bench).
@@ -26,145 +266,1814 @@ export class DeclgenService{
   //    the crash/restart continuity path (a watchdog restart must not destroy active work).
   //  • Same-owner polling: never touched. Same-owner boot: file TTL decides (mtime = last action).
   // Electron init() restore untouched.
-  async switchUser(userId:string, boot=false){
-    const uid=userId||'local';
-    const CONT_MS=10*60*1000;
-    if(this._owner===uid){
-      if(!boot)return{ok:true,switched:false};
-      try{const st=fsSync.statSync(this.activePath);if(Date.now()-st.mtimeMs<=CONT_MS)return{ok:true,switched:false}}catch{}
-      this.clientId=general.NEW_CLIENT_LABEL;this.direction='IM';this.clearDerived(false);this.logs=[];this.logSeq=0;this._pristine=true;
-      return{ok:true,switched:false,benched:true}
+  async switchUser(userId: string, boot = false) {
+    const uid = userId || 'local';
+    const CONT_MS = 10 * 60 * 1000;
+    if (this._owner === uid) {
+      if (!boot) return { ok: true, switched: false };
+      try {
+        const st = fsSync.statSync(this.activePath);
+        if (Date.now() - st.mtimeMs <= CONT_MS)
+          return { ok: true, switched: false };
+      } catch {}
+      this.clientId = general.NEW_CLIENT_LABEL;
+      this.direction = 'IM';
+      this.clearDerived(false);
+      this.logs = [];
+      this.logSeq = 0;
+      this._pristine = true;
+      return { ok: true, switched: false, benched: true };
     }
-    if(this.task.active)return{ok:false,error:'Изпълнява се задача от друг акаунт. Опитайте след малко.'};
-    if(this._owner!==null&&!this._pristine)await this.persist();
-    this._owner=uid;
-    this.logs=[];this.logSeq=0; // log narrative is per-account; never leak the previous owner's lines
-    let restored=false;
-    try{
-      const st=fsSync.statSync(this.activePath);
-      if(Date.now()-st.mtimeMs<=CONT_MS||!boot){
-        const p=JSON.parse(await fs.readFile(this.activePath,'utf8')) as Persisted;
-        const hasWork=(p?.version===2||p?.version===3)&&((p.clientId&&p.clientId!==general.NEW_CLIENT_LABEL)||(p.sourceFiles||[]).length>0||Number((p as any).caseState?.case_revision)>0);
-        if(hasWork){this.applyPersisted(p);restored=true;this.log(`възстановена незавършена работа: ${this.clientId}, rev ${this.case.case_revision}`)}
+    if (this.task.active)
+      return {
+        ok: false,
+        error: 'Изпълнява се задача от друг акаунт. Опитайте след малко.',
+      };
+    if (this._owner !== null && !this._pristine) await this.persist();
+    this._owner = uid;
+    this.logs = [];
+    this.logSeq = 0; // log narrative is per-account; never leak the previous owner's lines
+    let restored = false;
+    try {
+      const st = fsSync.statSync(this.activePath);
+      if (Date.now() - st.mtimeMs <= CONT_MS || !boot) {
+        const p = JSON.parse(
+          await fs.readFile(this.activePath, 'utf8'),
+        ) as Persisted;
+        const hasWork =
+          (p?.version === 2 || p?.version === 3) &&
+          ((p.clientId && p.clientId !== general.NEW_CLIENT_LABEL) ||
+            (p.sourceFiles || []).length > 0 ||
+            Number((p as any).caseState?.case_revision) > 0);
+        if (hasWork) {
+          this.applyPersisted(p);
+          restored = true;
+          this.log(
+            `възстановена незавършена работа: ${this.clientId}, rev ${this.case.case_revision}`,
+          );
+        }
       }
-    }catch{}
-    if(!restored){this.clientId=general.NEW_CLIENT_LABEL;this.direction='IM';this.clearDerived(false)}
-    this._pristine=true; // bound state equals file (restore) or is a declined-restore bench (never clobber)
-    return{ok:true,switched:true}
+    } catch {}
+    if (!restored) {
+      this.clientId = general.NEW_CLIENT_LABEL;
+      this.direction = 'IM';
+      this.clearDerived(false);
+    }
+    this._pristine = true; // bound state equals file (restore) or is a declined-restore bench (never clobber)
+    return { ok: true, switched: true };
   }
-  persisted():Persisted{return{version:3,caseId:this.caseId,clientId:this.clientId,direction:this.direction,sourceFiles:this.sourceFiles,selectedFolder:this.selectedFolder,dossier:this.dossier,invoiceRaw:this.invoiceRaw,invoice:this.invoice,invoiceName:this.invoiceName,packing:this.packing,waybill:this.waybill,fxInfo:this.fxInfo,declarationContext:this.declarationContext,classificationDecisions:this.classificationDecisions,buildParams:this.buildParams,generalSubmitted:this.generalSubmitted,generalAudit:this.generalAudit,generalExtras:this.generalExtras,report:this.report,issues:this.issues,decl:this.decl,declEx:this.declEx,xml:this.xml,trace:this.trace,caseState:this.case.toJSON(),caseTemplate:this.caseTemplate,caseCatalogEntries:this.caseCatalog.entries,lastRunDir:this.lastRunDir,casePackage:this.casePackage,intakeClientId:this.intakeClientId}}
-  async persist(){if(this._owner===null)return;await fs.mkdir(path.dirname(this.activePath),{recursive:true});const tmp=this.activePath+'.tmp';await fs.writeFile(tmp,JSON.stringify(this.persisted(),null,2),'utf8');await fs.rename(tmp,this.activePath);this._pristine=false}
-  assertCaseVersion(caseId:any,baseRevision:any){if(!caseId||String(caseId)!==this.caseId)throw new Error('Случаят е сменен. Затворете редактора и опитайте отново върху текущия case.');if(!Number.isInteger(Number(baseRevision))||Number(baseRevision)!==this.case.case_revision)throw new Error(`Черновата е от ревизия ${baseRevision}, а текущата е ${this.case.case_revision}. Обновете екрана и повторете промяната.`)}
-  clearDerived(keepSources=true){if(!keepSources){this.sourceFiles=[];this.selectedFolder='';this.dossier={}}else this.dossier=Object.fromEntries(this.sourceFiles.map(f=>[path.basename(f),{type:'selected',confidence:'pending',source:f}]));this.invoiceRaw=this.invoice=null;this.invoiceName=null;this.packing=this.waybill=this.fxInfo=null;this.declarationContext={};this.classificationDecisions={};this.generalSubmitted=this.generalAudit=null;this.generalExtras={};this.report={};this.issues=[];this.decl=this.declEx=null;this.xml='';this.trace={};this.caseTemplate=null;this.intakeClientId=null;this.caseCatalog=new Catalog();this.buildParams={fx_rate:'',ak_valuation:'',bc_valuation:'',auto_ident:this.buildParams?.auto_ident??true,spec_all:true,spec_refs:[],case_lrn:''};this.lastRunDir=this.casePackage=null;this.caseId=randomUUID();this.case=new CaseState();if(this.sourceFiles.length)this.case.selectInput('source files selected')}
-  async clear(){this.clearDerived(false);await this.persist();this.log('нова поръчка: case state е изчистен; клиентският каталог/профил са запазени');return{ok:true}}
-  invalidateForInputChange(reason:string){this.clearDerived(true);this.case.selectInput(reason);this.log(reason)}
-  async selectClient(clientId:string,direction:string){const dir=String(direction||'IM').toUpperCase()==='EX'?'EX':'IM';if(clientId!==this.clientId||dir!==this.direction){this.clientId=clientId||general.NEW_CLIENT_LABEL;this.direction=dir;this.invalidateForInputChange('сменен клиент/посока — извлеченото и декларацията са инвалидирани')}await this.persist();return{ok:true}}
-  async selectFolder(folder:string){const p=normalizeInputPath(folder);const st=await fs.stat(p).catch(()=>null);if(!st)throw new Error('Пътят не съществува: '+p);if(!st.isDirectory())throw new Error('Това е файл, а не папка. Използвайте „Избери файлове…“.');const candidates=(await fs.readdir(p,{withFileTypes:true})).filter(x=>x.isFile()&&allowedExt.has(path.extname(x.name).toLowerCase())).map(x=>path.join(p,x.name)).sort();const hasPdf=candidates.some(f=>path.extname(f).toLowerCase()==='.pdf');const files=candidates.filter(f=>!(hasPdf&&/^H1_.*\.xml$/i.test(path.basename(f))));if(!files.length)throw new Error('В папката няма PDF/CSV/XML/XLSX документи.');this.selectedFolder=p;this.sourceFiles=files;this.invalidateForInputChange('избрани нови source документи');await this.persist();return{ok:true,files:files.length}}
-  async uploadPaths(files:string[]){const good=files.map(normalizeInputPath).filter(f=>allowedExt.has(path.extname(f).toLowerCase()));if(!good.length)throw new Error('Няма поддържани файлове (PDF/CSV/XML/XLSX).');const missing:string[]=[];for(const f of good){const st=await fs.stat(f).catch(()=>null);if(!st?.isFile())missing.push(f)}if(missing.length)throw new Error('Файловете не съществуват: '+missing.join('; '));this.selectedFolder='';this.sourceFiles=[...new Set(good.map(f=>path.resolve(f)))];this.invalidateForInputChange('заменени source документи');await this.persist();return{ok:true,files:this.sourceFiles.length}}
-  progress(s:string){this.task.progress=s;this.log(s);if(this.cancelRequested)throw new Error('__CANCELLED__')}
-  async startTask<T>(name:string,fn:()=>Promise<T>){if(this.task.active)throw new Error(`вече има активна задача: ${this.task.active}`);this.cancelRequested=false;this.task={active:name,progress:'стартиране…',status:'running',error:''};try{const r=await fn();this.task={active:null,progress:'',status:'done',error:''};await this.persist();return r}catch(e){if(String(e).includes('__CANCELLED__')){this.task={active:null,progress:'',status:'cancelled',error:''};this.log('задачата е прекратена','warn');await this.persist();return{ok:false,error:'Задачата е прекратена.'} as any}this.task={active:null,progress:'',status:'error',error:String((e as any)?.message||e)};this.log(this.task.error,'error');await this.persist();throw e}}
-  stop(){this.cancelRequested=true;this.task.progress='спиране след текущата операция…';return{ok:true}}
-  async extractDossier(){this.case.assertMutable('extract dossier');return this.startTask('① Извличане',async()=>{if(!this.sourceFiles.length)throw new Error('Първо изберете source документи.');const generic=general.isNewClient(this.clientId);if(!generic){this.progress(`клиент: ${this.clientId}`);this.caseTemplate=await clients.load(this.clientId);if(!clients.capabilities(this.caseTemplate).has(this.direction))throw new Error(`Клиент '${this.clientId}' не поддържа посока ${this.direction}.`);this.caseCatalog=await Catalog.load(catalogDir(),this.clientId);if(this.direction==='IM'&&!this.buildParams.case_lrn)this.buildParams.case_lrn=await clients.nextLrn(this.caseTemplate)}else{if(this.direction==='EX')throw new Error('Новата фирма в тази версия е H1/вносен intake.');this.caseTemplate={client_id:general.NEW_CLIENT_ID,generic_intake:true};this.caseCatalog=new Catalog()}
-    const entries:any={}; for(const file of this.sourceFiles){this.progress(`четене: ${path.basename(file)}`);const ext=path.extname(file).toLowerCase();if(ext==='.xlsx'){if(generic)throw new Error('клиентският XLSX изисква запазен клиент');const rep=await dossierMod.importClientXlsx(file,this.clientId);entries[path.basename(file)]={type:'client_catalog',confidence:'dossier',catalog_import:rep,source:file};this.caseCatalog=await Catalog.load(catalogDir(),this.clientId);continue}let doc:any;if(ext==='.pdf')doc=await pdf.extractDocument(file);else doc=await tabular.load(file);this.progress(`класификация: ${path.basename(file)}`);if(ext==='.pdf'&&!String(doc.text||'').trim()){if(await vision.visionServerUp(vision.CURRENT.url,800)){this.progress(`OCR/vision: ${path.basename(file)}`);entries[path.basename(file)]={type:'invoice',confidence:'vision',doc:{...doc,text:''},invoice:await vision.extractScannedInvoice(file,{shouldStop:()=>this.cancelRequested,progress:s=>this.progress(s)}),source:file}}else entries[path.basename(file)]={type:'scanned',confidence:'none',needs_ocr:true,doc:{...doc,text:''},source:file};continue}const cls=await extract.classifyDocument(doc),entry:any={type:cls.type,confidence:cls.confidence,doc,source:file};if(['invoice','proforma'].includes(cls.type)){this.progress(`извличане фактура: ${path.basename(file)}`);entry.invoice=await extract.extractInvoice(doc,{shouldStop:()=>this.cancelRequested});if(cls.type==='proforma')entry.invoice.is_proforma=true}else if(cls.type==='packing_list'){this.progress(`извличане packing list: ${path.basename(file)}`);entry.packing=await extract.extractPackingList(doc)}else if(cls.type==='waybill'){entry.waybill=extract.extractWaybill(doc)}entries[path.basename(file)]=entry}
-     this.dossier=entries;const financial=Object.entries(entries).filter(([,e]:any)=>e.invoice).sort((a:any,b:any)=>Number(isFreightInvoice(a[1].invoice))-Number(isFreightInvoice(b[1].invoice))||Number(a[1].type==='proforma')-Number(b[1].type==='proforma')||Number((b[1].invoice?.lines||[]).length)-Number((a[1].invoice?.lines||[]).length));if(!financial.length)throw new Error('Няма фактура/проформа в досието.');this.invoiceName=financial[0][0];this.invoiceRaw=clone((financial[0][1] as any).invoice);this.packing=clone((Object.values(entries).find((e:any)=>e.packing) as any)?.packing||null);this.waybill=clone((Object.values(entries).find((e:any)=>e.waybill) as any)?.waybill||null);this.classificationDecisions=await review.load(runsDir(),this.clientId,this.invoiceRaw);this.invoice=review.apply(this.invoiceRaw,this.classificationDecisions);const health=workflow.analyzeDossier(entries,this.invoice,this.packing,this.waybill);if(health.blockers.length)this.log('досие blockers: '+health.blockers.join(' | '),'warn');for(const w of health.warnings)this.log(w,'warn');const cur=String(this.invoice.currency||'').toUpperCase();if(cur&&cur!=='EUR'){try{this.progress(`курс БНБ: ${cur}`);this.fxInfo=await fx.getRate(cur,new Date(),path.join(runsDir(),'.fxcache'));this.buildParams.fx_rate=String(this.fxInfo.rate)}catch(e){this.log(`БНБ курс неуспешен: ${e}`,'warn')}}this.case.markExtracted();this.case.bump('resolved extraction snapshot');this.case.markReviewRequired(false);this.log(`извлечено: ${this.invoice.invoice_number||'без номер'} / ${this.invoice.lines?.length||0} реда`);return{ok:true,health}})}
-  canonicalSnapshot(extras:any){return buildSnapshot(this.invoice,this.clientId,this.direction==='EX',{...extras,client_template:this.caseTemplate},this.packing,this.waybill,this.classificationDecisions)}
-  classificationRows(){const groups=this.report?.grouping||[];return groups.map((g:any)=>{const d=review.find(this.classificationDecisions,g.group,g.line_nos,g.declaration_hs,g.declaration_origin),lines=(this.invoice?.lines||[]).filter((l:any)=>g.line_nos?.map(String).includes(String(l.no)));return{approved:!!d||g.classification_state==='confirmed',item_no:g.item,item:g.item,group:g.group,description:(g.descriptions||lines.map((l:any)=>l.description)).join('; '),descriptions:g.descriptions||lines.map((l:any)=>l.description),inv_hs:(g.invoice_codes||[]).join(', '),invoice_hs:(g.invoice_codes||[]).join(', '),decl_hs:g.declaration_hs,source:g.source,net_kg:g.net_kg,price:g.price,origin:g.declaration_origin,line_nos:g.line_nos}})}
-  pendingReviews(){return this.classificationRows().filter((r:any)=>!r.approved)}
-  currentBlockers(){const out:string[]=[];out.push(...this.case.readyBlockers());if(this.report?.general_intake?.placeholder_fields?.length)out.push('new-importer placeholders: '+this.report.general_intake.placeholder_fields.join(', '));const pending=this.pendingReviews();if(pending.length)out.push(`${pending.length} класификационни решения чакат човешки преглед`);if(this.issues.some(i=>i.level==='ERROR'))out.push(`${this.issues.filter(i=>i.level==='ERROR').length} conformance error(s)`);return[...new Set(out)]}
-  readiness(){const blockers=this.currentBlockers();return{ready:this.case.stage==='READY'&&blockers.length===0,blockers,stage:this.case.stage,case_revision:this.case.case_revision,built_from_revision:this.case.built_from_revision,validated_revision:this.case.validated_revision}}
-  async build(body:any){this.assertCaseVersion(body?.case_id,body?.base_revision);this.case.assertMutable('build declaration');return this.startTask('② Генериране',async()=>{if(!this.invoice)throw new Error('Първо извлечете фактура (①).');const normalized={fx_rate:String(body?.fx_rate||''),ak_valuation:String(body?.ak_valuation||''),bc_valuation:String(body?.bc_valuation||''),auto_ident:!!body?.auto_ident,spec_all:!!body?.spec_all,spec_refs:Array.isArray(body?.spec_refs)?body.spec_refs:[],case_lrn:String(this.buildParams?.case_lrn||'')};if(!deepEqual(normalized,this.buildParams)){this.buildParams=normalized;this.case.bump('потвърдени build параметри')}
-    let tpl=this.caseTemplate,catalog=this.caseCatalog,baseExtras:any={};if(general.isNewClient(this.clientId)){if(!this.generalSubmitted)throw new Error('Нужни са H1 данни за новата фирма.');const r=general.build(this.invoice,this.packing,this.generalSubmitted);tpl=r.template;catalog=r.catalog;this.generalAudit=r.audit;this.generalExtras=r.extras;baseExtras=clone(r.extras);this.caseTemplate=clone(tpl);this.caseCatalog=new Catalog(clone(catalog.entries))}else if(!tpl)throw new Error('Клиентският template не е фиксиран в текущия case; пуснете ① отново.');if(!general.isNewClient(this.clientId)&&this.buildParams.case_lrn)baseExtras.lrn=this.buildParams.case_lrn;if(this.declarationContext)baseExtras.declaration_context=clone(this.declarationContext);const cur=String(this.invoice.currency||'').toUpperCase();if(cur&&cur!=='EUR'&&this.buildParams.fx_rate){const rate=Number(String(this.buildParams.fx_rate).replace(',','.'));if(!Number.isFinite(rate)||rate<=0)throw new Error(`Курсът '${this.buildParams.fx_rate}' не е валиден.`);baseExtras.exchange_rate=String(rate);baseExtras.exchange_rate_date=this.fxInfo?.date||null}let pwarns:string[]=[];if(this.packing){const [patch,w]=packingMod.extractMasses(this.invoice,this.packing);if(w.some(x=>x.includes('all packing facts discarded')))throw new Error('Packing list не съвпада с фактурата: '+w.join(' | '));Object.assign(baseExtras,patch);pwarns=w}if(this.waybill){if(this.waybill.gross_kg!=null)baseExtras.total_gross_kg=String(this.waybill.gross_kg);if(this.waybill.pieces!=null)baseExtras.total_packages=String(this.waybill.pieces);if(this.waybill.waybill_number)(baseExtras.transport_documents??=[]).push({type:'N740',referenceNumber:String(this.waybill.waybill_number)})}baseExtras.additional_refs=this.buildParams.spec_refs.filter((r:any)=>r.code&&r.reference).map((r:any)=>({type:String(r.code),referenceNumber:String(r.reference)}));baseExtras.additional_refs_scope=this.buildParams.spec_all?'all':'first';if(this.buildParams.ak_valuation)baseExtras.valuation_freight_total=this.buildParams.ak_valuation;if(this.buildParams.bc_valuation)baseExtras.valuation_insurance_total=this.buildParams.bc_valuation;for(const [name,e] of Object.entries(this.dossier) as any){if(!e.invoice||name===this.invoiceName)continue;(baseExtras.dossier_docs??=[]).push({class:'invoice',number:e.invoice.invoice_number,date:e.invoice.invoice_date,label:'ТРАНСПОРТ',count:1});if(e.invoice.grand_total&&!baseExtras.valuation_freight_total)baseExtras.valuation_freight_total=String(e.invoice.grand_total)}
-    const snap=this.canonicalSnapshot(baseExtras),fp=fingerprint(snap);this.progress('детерминиран build от canonical snapshot');let decl:any,rep:any;if(this.direction==='EX')[decl,rep]=await transformEx.buildExport(this.invoice,tpl,catalog,baseExtras);else[decl,rep]=await transform.buildDeclaration(this.invoice,tpl,catalog,baseExtras);rep.warnings=[...(rep.warnings||[]),...pwarns.map(w=>'опаковачен лист: '+w)];if(this.generalAudit){rep.general_intake=clone(this.generalAudit);if(this.generalAudit.placeholder_fields?.length)rep.warnings.push('new-importer draft: placeholders remain; export is blocked')}this.report=rep;this.decl=this.direction==='IM'?decl:null;this.declEx=this.direction==='EX'?decl:null;this.case.markBuilt(fp);this.issues=this.direction==='IM'?conformance.check(decl,tpl):conformanceEx.checkEx(decl);const noErrors=!this.issues.some(i=>i.level==='ERROR');this.case.markValidated(noErrors);this.classificationDecisions=await review.load(runsDir(),this.clientId,this.invoice);const blockers:string[]=[];const pending=this.pendingReviews();if(pending.length)blockers.push(`${pending.length} класификационни решения`);if(this.generalAudit?.placeholder_fields?.length)blockers.push('new-importer placeholders');if(!noErrors)blockers.push('conformance errors');this.case.markReady(blockers);this.xml=this.direction==='IM'?xmlio.emitText(decl,tpl):bg515c.emitText(decl);const runDir=path.join(runsDir(),`run-${safe(this.clientId,'client')}-${safe(this.invoice.invoice_number,'draft')}`);await fs.mkdir(runDir,{recursive:true});const src=path.join(runDir,'source');await fs.mkdir(src,{recursive:true});for(const f of this.sourceFiles)try{await fs.copyFile(f,path.join(src,path.basename(f)))}catch{}await reportMod.saveRun(decl,rep,this.invoice,runDir,this.direction==='EX');await workflow.saveAudit(runDir,{client_id:this.clientId,direction:this.direction,invoice:this.invoice,dossier_files:this.sourceFiles,dossier_entries:this.dossier,report:rep,conformance:this.issues,approved:false,case_state:this.case.toJSON()});this.trace=workflow.buildCaseTrace({client_id:this.clientId,direction:this.direction,invoice:this.invoice,packing:this.packing,waybill:this.waybill,dossier_entries:this.dossier,report:rep,conformance:this.issues,case_state:this.case.toJSON()});await workflow.saveCaseTrace(runDir,this.trace);this.lastRunDir=runDir;this.casePackage=null;this.log(`build: rev ${this.case.case_revision}, ${this.issues.filter(i=>i.level==='ERROR').length} errors`);return{ok:true,stage:this.case.stage,blockers:this.currentBlockers()}})}
-  async updateInvoice(invoice:any,caseId:any,baseRevision:any){this.assertCaseVersion(caseId,baseRevision);extract.validateInvoice(invoice);if(deepEqual(invoice,this.invoice))return{ok:true,changed:false};this.case.bump('human-confirmed invoice correction');this.invoice=clone(invoice);this.decl=this.declEx=null;this.xml='';this.report={};this.issues=[];await this.persist();this.log('фактура: потвърдена корекция → STALE');return{ok:true,changed:true}}
+  persisted(): Persisted {
+    return {
+      version: 3,
+      caseId: this.caseId,
+      clientId: this.clientId,
+      direction: this.direction,
+      sourceFiles: this.sourceFiles,
+      selectedFolder: this.selectedFolder,
+      dossier: this.dossier,
+      invoiceRaw: this.invoiceRaw,
+      invoice: this.invoice,
+      invoiceName: this.invoiceName,
+      packing: this.packing,
+      waybill: this.waybill,
+      cession: this.cession,
+      fxInfo: this.fxInfo,
+      declarationContext: this.declarationContext,
+      classificationDecisions: this.classificationDecisions,
+      buildParams: this.buildParams,
+      generalSubmitted: this.generalSubmitted,
+      generalAudit: this.generalAudit,
+      generalExtras: this.generalExtras,
+      report: this.report,
+      issues: this.issues,
+      decl: this.decl,
+      declEx: this.declEx,
+      xml: this.xml,
+      trace: this.trace,
+      caseState: this.case.toJSON(),
+      caseTemplate: this.caseTemplate,
+      caseCatalogEntries: this.caseCatalog.entries,
+      lastRunDir: this.lastRunDir,
+      casePackage: this.casePackage,
+      intakeClientId: this.intakeClientId,
+    };
+  }
+  async persist() {
+    if (this._owner === null) return;
+    await fs.mkdir(path.dirname(this.activePath), { recursive: true });
+    const tmp = this.activePath + '.tmp';
+    await fs.writeFile(tmp, JSON.stringify(this.persisted(), null, 2), 'utf8');
+    await fs.rename(tmp, this.activePath);
+    this._pristine = false;
+  }
+  assertCaseVersion(caseId: any, baseRevision: any) {
+    if (!caseId || String(caseId) !== this.caseId)
+      throw new Error(
+        'Случаят е сменен. Затворете редактора и опитайте отново върху текущия case.',
+      );
+    if (
+      !Number.isInteger(Number(baseRevision)) ||
+      Number(baseRevision) !== this.case.case_revision
+    )
+      throw new Error(
+        `Черновата е от ревизия ${baseRevision}, а текущата е ${this.case.case_revision}. Обновете екрана и повторете промяната.`,
+      );
+  }
+  clearDerived(keepSources = true) {
+    if (!keepSources) {
+      this.sourceFiles = [];
+      this.selectedFolder = '';
+      this.dossier = {};
+    } else
+      this.dossier = Object.fromEntries(
+        this.sourceFiles.map((f) => [
+          path.basename(f),
+          { type: 'selected', confidence: 'pending', source: f },
+        ]),
+      );
+    this.invoiceRaw = this.invoice = null;
+    this.invoiceName = null;
+    this.packing = this.waybill = this.cession = this.fxInfo = null;
+    this.declarationContext = {};
+    this.classificationDecisions = {};
+    this.generalSubmitted = this.generalAudit = null;
+    this.generalExtras = {};
+    this.report = {};
+    this.issues = [];
+    this.decl = this.declEx = null;
+    this.xml = '';
+    this.trace = {};
+    this.caseTemplate = null;
+    this.intakeClientId = null;
+    this.caseCatalog = new Catalog();
+    this.buildParams = {
+      fx_rate: '',
+      ak_valuation: '',
+      bc_valuation: '',
+      auto_ident: this.buildParams?.auto_ident ?? true,
+      spec_all: true,
+      spec_refs: [],
+      prev_doc_type: 'N337',
+      prev_doc_ref: '',
+      case_lrn: '',
+    };
+    this.lastRunDir = this.casePackage = null;
+    this.caseId = randomUUID();
+    this.case = new CaseState();
+    if (this.sourceFiles.length) this.case.selectInput('source files selected');
+  }
+  async clear() {
+    this.clearDerived(false);
+    await this.persist();
+    this.log(
+      'нова поръчка: case state е изчистен; клиентският каталог/профил са запазени',
+    );
+    return { ok: true };
+  }
+  invalidateForInputChange(reason: string) {
+    this.clearDerived(true);
+    this.case.selectInput(reason);
+    this.log(reason);
+  }
+  async selectClient(clientId: string, direction: string) {
+    const dir = String(direction || 'IM').toUpperCase() === 'EX' ? 'EX' : 'IM';
+    if (clientId !== this.clientId || dir !== this.direction) {
+      this.clientId = clientId || general.NEW_CLIENT_LABEL;
+      this.direction = dir;
+      this.invalidateForInputChange(
+        'сменен клиент/посока — извлеченото и декларацията са инвалидирани',
+      );
+    }
+    await this.persist();
+    return { ok: true };
+  }
+  async selectFolder(folder: string) {
+    const p = normalizeInputPath(folder);
+    const st = await fs.stat(p).catch(() => null);
+    if (!st) throw new Error('Пътят не съществува: ' + p);
+    if (!st.isDirectory())
+      throw new Error(
+        'Това е файл, а не папка. Използвайте „Избери файлове…“.',
+      );
+    const candidates = (await fs.readdir(p, { withFileTypes: true }))
+      .filter(
+        (x) => x.isFile() && allowedExt.has(path.extname(x.name).toLowerCase()),
+      )
+      .map((x) => path.join(p, x.name))
+      .sort();
+    const hasPdf = candidates.some(
+      (f) => path.extname(f).toLowerCase() === '.pdf',
+    );
+    const files = candidates.filter(
+      (f) => !(hasPdf && /^H1_.*\.xml$/i.test(path.basename(f))),
+    );
+    if (!files.length)
+      throw new Error('В папката няма PDF/CSV/XML/XLSX документи.');
+    this.selectedFolder = p;
+    this.sourceFiles = files;
+    this.invalidateForInputChange('избрани нови source документи');
+    await this.persist();
+    return { ok: true, files: files.length };
+  }
+  async uploadPaths(files: string[]) {
+    const good = files
+      .map(normalizeInputPath)
+      .filter((f) => allowedExt.has(path.extname(f).toLowerCase()));
+    if (!good.length)
+      throw new Error('Няма поддържани файлове (PDF/CSV/XML/XLSX).');
+    const missing: string[] = [];
+    for (const f of good) {
+      const st = await fs.stat(f).catch(() => null);
+      if (!st?.isFile()) missing.push(f);
+    }
+    if (missing.length)
+      throw new Error('Файловете не съществуват: ' + missing.join('; '));
+    this.selectedFolder = '';
+    this.sourceFiles = [...new Set(good.map((f) => path.resolve(f)))];
+    this.invalidateForInputChange('заменени source документи');
+    await this.persist();
+    return { ok: true, files: this.sourceFiles.length };
+  }
+  progress(s: string) {
+    this.task.progress = s;
+    this.log(s);
+    if (this.cancelRequested) throw new Error('__CANCELLED__');
+  }
+  async startTask<T>(name: string, fn: () => Promise<T>) {
+    if (this.task.active)
+      throw new Error(`вече има активна задача: ${this.task.active}`);
+    this.cancelRequested = false;
+    this.task = {
+      active: name,
+      progress: 'стартиране…',
+      status: 'running',
+      error: '',
+    };
+    try {
+      const r = await fn();
+      this.task = { active: null, progress: '', status: 'done', error: '' };
+      await this.persist();
+      return r;
+    } catch (e) {
+      if (
+        String(e).includes('__CANCELLED__') ||
+        e instanceof extract.ExtractionCancelled
+      ) {
+        this.task = {
+          active: null,
+          progress: '',
+          status: 'cancelled',
+          error: '',
+        };
+        this.log('задачата е прекратена', 'warn');
+        await this.persist();
+        return { ok: false, error: 'Задачата е прекратена.' } as any;
+      }
+      this.task = {
+        active: null,
+        progress: '',
+        status: 'error',
+        error: String((e as any)?.message || e),
+      };
+      this.log(this.task.error, 'error');
+      await this.persist();
+      throw e;
+    }
+  }
+  stop() {
+    this.cancelRequested = true;
+    this.task.progress = 'спиране след текущата операция…';
+    return { ok: true };
+  }
+  async extractDossier() {
+    this.case.assertMutable('extract dossier');
+    return this.startTask('① Извличане', async () => {
+      if (!this.sourceFiles.length)
+        throw new Error('Първо изберете source документи.');
+      const generic = general.isNewClient(this.clientId);
+      if (!generic) {
+        this.progress(`клиент: ${this.clientId}`);
+        this.caseTemplate = await clients.load(this.clientId);
+        if (!clients.capabilities(this.caseTemplate).has(this.direction))
+          throw new Error(
+            `Клиент '${this.clientId}' не поддържа посока ${this.direction}.`,
+          );
+        this.caseCatalog = await Catalog.load(catalogDir(), this.clientId);
+        if (this.direction === 'IM' && !this.buildParams.case_lrn)
+          this.buildParams.case_lrn = await clients.nextLrn(this.caseTemplate);
+      } else {
+        if (this.direction === 'EX')
+          throw new Error('Новата фирма в тази версия е H1/вносен intake.');
+        this.caseTemplate = {
+          client_id: general.NEW_CLIENT_ID,
+          generic_intake: true,
+        };
+        this.caseCatalog = new Catalog();
+      }
+      const loc = this.caseTemplate?.location_of_goods?.ADDRESS || {},
+        buyerCtx =
+          generic || this.direction !== 'IM'
+            ? null
+            : {
+                company: String(this.caseTemplate?.display_name || ''),
+                country: String(loc.Country || 'BG'),
+                address: String(loc.StreetAndNumber || ''),
+                postcode: String(loc.Postcode || ''),
+                city: String(loc.City || ''),
+                eori: String(
+                  this.caseTemplate?.importer_tin ||
+                    this.caseTemplate?.declarant_tin ||
+                    '',
+                ),
+              };
+      const entries: any = {};
+      for (const file of this.sourceFiles) {
+        this.progress(`четене: ${path.basename(file)}`);
+        const ext = path.extname(file).toLowerCase();
+        if (ext === '.xlsx') {
+          if (generic)
+            throw new Error('клиентският XLSX изисква запазен клиент');
+          const rep = await dossierMod.importClientXlsx(file, this.clientId);
+          entries[path.basename(file)] = {
+            type: 'client_catalog',
+            confidence: 'dossier',
+            catalog_import: rep,
+            source: file,
+          };
+          this.caseCatalog = await Catalog.load(catalogDir(), this.clientId);
+          continue;
+        }
+        let doc: any;
+        if (ext === '.pdf') doc = await pdf.extractDocument(file);
+        else doc = await tabular.load(file);
+        this.progress(`класификация: ${path.basename(file)}`);
+        if (ext === '.pdf' && !String(doc.text || '').trim()) {
+          if (await vision.visionServerUp(vision.CURRENT.url, 800)) {
+            this.progress(`OCR/vision: ${path.basename(file)}`);
+            entries[path.basename(file)] = {
+              type: 'invoice',
+              confidence: 'vision',
+              doc: { ...doc, text: '' },
+              invoice: await vision.extractScannedInvoice(file, {
+                shouldStop: () => this.cancelRequested,
+                progress: (s) => this.progress(s),
+              }),
+              source: file,
+            };
+          } else
+            entries[path.basename(file)] = {
+              type: 'scanned',
+              confidence: 'none',
+              needs_ocr: true,
+              doc: { ...doc, text: '' },
+              source: file,
+            };
+          continue;
+        }
+        try {
+          const cls = await extract.classifyDocument(doc),
+            entry: any = {
+              type: cls.type,
+              confidence: cls.confidence,
+              doc,
+              source: file,
+            };
+          if (['invoice', 'proforma'].includes(cls.type)) {
+            this.progress(`извличане фактура: ${path.basename(file)}`);
+            entry.invoice = await extract.extractInvoice(doc, {
+              shouldStop: () => this.cancelRequested,
+              buyer: buyerCtx,
+            });
+            if (cls.type === 'proforma') entry.invoice.is_proforma = true;
+          } else if (cls.type === 'packing_list') {
+            this.progress(`извличане packing list: ${path.basename(file)}`);
+            entry.packing = await extract.extractPackingList(doc);
+          } else if (cls.type === 'waybill') {
+            entry.waybill = extract.extractWaybill(doc);
+          } else if (cls.type === 'cession') {
+            entry.cession = extract.extractCession(doc);
+          }
+          entries[path.basename(file)] = entry;
+        } catch (e) {
+          if (e instanceof extract.ExtractionCancelled) throw e;
+          const msg = e instanceof Error ? e.message : String(e);
+          this.log(`${path.basename(file)}: ${msg}`, 'warn');
+          entries[path.basename(file)] = {
+            type: 'unrecognized',
+            confidence: 'error',
+            error: msg,
+            doc,
+            source: file,
+          };
+        }
+      }
+      this.dossier = entries;
+      const financial = Object.entries(entries)
+        .filter(([, e]: any) => e.invoice)
+        .sort(
+          (a: any, b: any) =>
+            Number(isFreightInvoice(a[1].invoice)) -
+              Number(isFreightInvoice(b[1].invoice)) ||
+            Number(a[1].type === 'proforma') -
+              Number(b[1].type === 'proforma') ||
+            Number((b[1].invoice?.lines || []).length) -
+              Number((a[1].invoice?.lines || []).length),
+        );
+      if (!financial.length)
+        throw new Error('Няма фактура/проформа в досието.');
+      this.invoiceName = financial[0][0];
+      this.invoiceRaw = clone((financial[0][1] as any).invoice);
+      this.packing = clone(
+        (Object.values(entries).find((e: any) => e.packing) as any)?.packing ||
+          null,
+      );
+      this.waybill = clone(
+        (Object.values(entries).find((e: any) => e.waybill) as any)?.waybill ||
+          null,
+      );
+      this.cession = clone(
+        (Object.values(entries).find((e: any) => e.cession) as any)?.cession ||
+          null,
+      );
+      if (this.cession) {
+        const wbMatch =
+          !this.cession.waybill_number ||
+          !this.waybill?.waybill_number ||
+          String(this.cession.waybill_number) ===
+            String(this.waybill.waybill_number);
+        this.log(
+          `цесия: ДВС ${this.cession.mrn_item || '—'}` +
+            (this.cession.arrival_id
+              ? `, пристигане ${this.cession.arrival_id}`
+              : '') +
+            (wbMatch ? '' : ` — внимание: товарителница ${this.cession.waybill_number} ≠ ${this.waybill?.waybill_number}`),
+          wbMatch ? 'info' : 'warn',
+        );
+      }
+      this.classificationDecisions = await review.load(
+        runsDir(),
+        this.clientId,
+        this.invoiceRaw,
+      );
+      this.invoice = review.apply(
+        this.invoiceRaw,
+        this.classificationDecisions,
+      );
+      const health = workflow.analyzeDossier(
+        entries,
+        this.invoice,
+        this.packing,
+        this.waybill,
+      );
+      if (health.blockers.length)
+        this.log('досие blockers: ' + health.blockers.join(' | '), 'warn');
+      for (const w of health.warnings) this.log(w, 'warn');
+      const cur = String(this.invoice.currency || '').toUpperCase();
+      if (cur && cur !== 'EUR') {
+        try {
+          this.progress(`курс БНБ: ${cur}`);
+          this.fxInfo = await fx.getRate(
+            cur,
+            new Date(),
+            path.join(runsDir(), '.fxcache'),
+          );
+          this.buildParams.fx_rate = String(this.fxInfo.rate);
+        } catch (e) {
+          this.log(`БНБ курс неуспешен: ${e}`, 'warn');
+        }
+      }
+      this.case.markExtracted();
+      this.case.bump('resolved extraction snapshot');
+      this.case.markReviewRequired(false);
+      this.log(
+        `извлечено: ${this.invoice.invoice_number || 'без номер'} / ${this.invoice.lines?.length || 0} реда`,
+      );
+      return { ok: true, health };
+    });
+  }
+  canonicalSnapshot(extras: any) {
+    return buildSnapshot(
+      this.invoice,
+      this.clientId,
+      this.direction === 'EX',
+      { ...extras, client_template: this.caseTemplate },
+      this.packing,
+      this.waybill,
+      this.classificationDecisions,
+    );
+  }
+  classificationRows() {
+    const groups = this.report?.grouping || [];
+    return groups.map((g: any) => {
+      const d = review.find(
+          this.classificationDecisions,
+          g.group,
+          g.line_nos,
+          g.declaration_hs,
+          g.declaration_origin,
+        ),
+        lines = (this.invoice?.lines || []).filter((l: any) =>
+          g.line_nos?.map(String).includes(String(l.no)),
+        );
+      return {
+        approved: !!d || g.classification_state === 'confirmed',
+        item_no: g.item,
+        item: g.item,
+        group: g.group,
+        description: (
+          g.descriptions || lines.map((l: any) => l.description)
+        ).join('; '),
+        descriptions: g.descriptions || lines.map((l: any) => l.description),
+        inv_hs: (g.invoice_codes || []).join(', '),
+        invoice_hs: (g.invoice_codes || []).join(', '),
+        decl_hs: g.declaration_hs,
+        source: g.source,
+        net_kg: g.net_kg,
+        price: g.price,
+        origin: g.declaration_origin,
+        line_nos: g.line_nos,
+      };
+    });
+  }
+  pendingReviews() {
+    return this.classificationRows().filter((r: any) => !r.approved);
+  }
+  currentBlockers() {
+    const out: string[] = [];
+    out.push(...this.case.readyBlockers());
+    if (this.report?.general_intake?.placeholder_fields?.length)
+      out.push(
+        'new-importer placeholders: ' +
+          this.report.general_intake.placeholder_fields.join(', '),
+      );
+    const pending = this.pendingReviews();
+    if (pending.length)
+      out.push(
+        `${pending.length} класификационни решения чакат човешки преглед`,
+      );
+    if (this.issues.some((i) => i.level === 'ERROR'))
+      out.push(
+        `${this.issues.filter((i) => i.level === 'ERROR').length} conformance error(s)`,
+      );
+    return [...new Set(out)];
+  }
+  readiness() {
+    const blockers = this.currentBlockers();
+    return {
+      ready: this.case.stage === 'READY' && blockers.length === 0,
+      blockers,
+      stage: this.case.stage,
+      case_revision: this.case.case_revision,
+      built_from_revision: this.case.built_from_revision,
+      validated_revision: this.case.validated_revision,
+    };
+  }
+  async build(body: any) {
+    this.assertCaseVersion(body?.case_id, body?.base_revision);
+    this.case.assertMutable('build declaration');
+    return this.startTask('② Генериране', async () => {
+      if (!this.invoice) throw new Error('Първо извлечете фактура (①).');
+      const normalized = {
+        fx_rate: String(body?.fx_rate || ''),
+        ak_valuation: String(body?.ak_valuation || ''),
+        bc_valuation: String(body?.bc_valuation || ''),
+        auto_ident: !!body?.auto_ident,
+        spec_all: !!body?.spec_all,
+        spec_refs: Array.isArray(body?.spec_refs) ? body.spec_refs : [],
+        prev_doc_type: String(body?.prev_doc_type || 'N337'),
+        prev_doc_ref: String(body?.prev_doc_ref || ''),
+        case_lrn: String(this.buildParams?.case_lrn || ''),
+      };
+      if (!deepEqual(normalized, this.buildParams)) {
+        this.buildParams = normalized;
+        this.case.bump('потвърдени build параметри');
+      }
+      let tpl = this.caseTemplate,
+        catalog = this.caseCatalog,
+        baseExtras: any = {};
+      if (general.isNewClient(this.clientId)) {
+        if (!this.generalSubmitted)
+          throw new Error('Нужни са H1 данни за новата фирма.');
+        const r = general.build(
+          this.invoice,
+          this.packing,
+          this.generalSubmitted,
+        );
+        tpl = r.template;
+        catalog = r.catalog;
+        this.generalAudit = r.audit;
+        this.generalExtras = r.extras;
+        baseExtras = clone(r.extras);
+        this.caseTemplate = clone(tpl);
+        this.caseCatalog = new Catalog(clone(catalog.entries));
+      } else if (!tpl)
+        throw new Error(
+          'Клиентският template не е фиксиран в текущия case; пуснете ① отново.',
+        );
+      if (!general.isNewClient(this.clientId) && this.buildParams.case_lrn)
+        baseExtras.lrn = this.buildParams.case_lrn;
+      if (this.declarationContext)
+        baseExtras.declaration_context = clone(this.declarationContext);
+      const cur = String(this.invoice.currency || '').toUpperCase();
+      if (cur && cur !== 'EUR' && this.buildParams.fx_rate) {
+        const rate = Number(String(this.buildParams.fx_rate).replace(',', '.'));
+        if (!Number.isFinite(rate) || rate <= 0)
+          throw new Error(`Курсът '${this.buildParams.fx_rate}' не е валиден.`);
+        baseExtras.exchange_rate = String(rate);
+        baseExtras.exchange_rate_date = this.fxInfo?.date || null;
+      }
+      let pwarns: string[] = [];
+      if (this.packing) {
+        const [patch, w] = packingMod.extractMasses(this.invoice, this.packing);
+        if (w.some((x) => x.includes('all packing facts discarded')))
+          throw new Error(
+            'Packing list не съвпада с фактурата: ' + w.join(' | '),
+          );
+        Object.assign(baseExtras, patch);
+        pwarns = w;
+      }
+      if (this.waybill) {
+        // Packing list is the authority for gross mass; the waybill's courier
+        // billing weight only fills the gap when no packing total exists.
+        if (this.waybill.gross_kg != null && baseExtras.total_gross_kg == null)
+          baseExtras.total_gross_kg = String(this.waybill.gross_kg);
+        // Packages align with the waybill count.
+        if (this.waybill.pieces != null)
+          baseExtras.total_packages = String(this.waybill.pieces);
+        if (this.waybill.waybill_number) {
+          (baseExtras.transport_documents ??= []).push({
+            type: 'N740',
+            referenceNumber: String(this.waybill.waybill_number),
+          });
+          const arrivalId = String(this.waybill.waybill_number);
+          if (
+            baseExtras.arrival_transport == null &&
+            arrivalId.length <= conformance.ALPHA_TEXT_LIMITS.arrivalMeans
+          )
+            baseExtras.arrival_transport = {
+              IdeOfMeaOfTraAtArrival: arrivalId,
+              IdeOfMeaOfTraAtArrivalCode: '40',
+            };
+        }
+      }
+      baseExtras.additional_refs = this.buildParams.spec_refs
+        .filter((r: any) => r.code && r.reference)
+        .map((r: any) => ({
+          type: String(r.code),
+          referenceNumber: String(r.reference),
+        }));
+      baseExtras.additional_refs_scope = this.buildParams.spec_all
+        ? 'all'
+        : 'first';
+      if (this.buildParams.ak_valuation)
+        baseExtras.valuation_freight_total = this.buildParams.ak_valuation;
+      if (this.buildParams.bc_valuation)
+        baseExtras.valuation_insurance_total = this.buildParams.bc_valuation;
+      if (this.buildParams.prev_doc_ref)
+        baseExtras.previous_documents = [
+          {
+            type: this.buildParams.prev_doc_type || 'N337',
+            referenceNumber: this.buildParams.prev_doc_ref,
+          },
+        ];
+      // Cession (temporary-storage letter): auto-apply its ДВС MRN/item and
+      // arrival means only when its waybill matches the dossier waybill — a
+      // foreign cession must never inject its references into the case.
+      const cessionTrusted =
+        this.cession &&
+        (!this.cession.waybill_number ||
+          !this.waybill?.waybill_number ||
+          String(this.cession.waybill_number) ===
+            String(this.waybill.waybill_number));
+      if (cessionTrusted) {
+        if (!baseExtras.previous_documents?.length && this.cession.mrn_item)
+          baseExtras.previous_documents = [
+            { type: 'N337', referenceNumber: String(this.cession.mrn_item) },
+          ];
+        if (
+          baseExtras.arrival_transport == null &&
+          this.cession.arrival_id &&
+          String(this.cession.arrival_id).length <=
+            conformance.ALPHA_TEXT_LIMITS.arrivalMeans
+        )
+          baseExtras.arrival_transport = {
+            IdeOfMeaOfTraAtArrival: String(this.cession.arrival_id),
+            IdeOfMeaOfTraAtArrivalCode: String(
+              this.cession.arrival_code || '40',
+            ),
+          };
+      }
+      for (const [name, e] of Object.entries(this.dossier) as any) {
+        if (!e.invoice || name === this.invoiceName) continue;
+        (baseExtras.dossier_docs ??= []).push({
+          class: 'invoice',
+          number: e.invoice.invoice_number,
+          date: e.invoice.invoice_date,
+          label: 'ТРАНСПОРТ',
+          count: 1,
+        });
+        if (e.invoice.grand_total && !baseExtras.valuation_freight_external)
+          baseExtras.valuation_freight_external = String(e.invoice.grand_total);
+      }
+      const snap = this.canonicalSnapshot(baseExtras),
+        fp = fingerprint(snap);
+      this.progress('детерминиран build от canonical snapshot');
+      let decl: any, rep: any;
+      if (this.direction === 'EX')
+        [decl, rep] = await transformEx.buildExport(
+          this.invoice,
+          tpl,
+          catalog,
+          baseExtras,
+        );
+      else
+        [decl, rep] = await transform.buildDeclaration(
+          this.invoice,
+          tpl,
+          catalog,
+          baseExtras,
+        );
+      rep.warnings = [
+        ...(rep.warnings || []),
+        ...pwarns.map((w) => 'опаковачен лист: ' + w),
+      ];
+      if (this.generalAudit) {
+        rep.general_intake = clone(this.generalAudit);
+        if (this.generalAudit.placeholder_fields?.length)
+          rep.warnings.push(
+            'new-importer draft: placeholders remain; export is blocked',
+          );
+      }
+      this.report = rep;
+      this.decl = this.direction === 'IM' ? decl : null;
+      this.declEx = this.direction === 'EX' ? decl : null;
+      this.case.markBuilt(fp);
+      this.issues =
+        this.direction === 'IM'
+          ? conformance.check(decl, tpl)
+          : conformanceEx.checkEx(decl);
+      const noErrors = !this.issues.some((i) => i.level === 'ERROR');
+      this.case.markValidated(noErrors);
+      this.classificationDecisions = await review.load(
+        runsDir(),
+        this.clientId,
+        this.invoice,
+      );
+      const blockers: string[] = [];
+      const pending = this.pendingReviews();
+      if (pending.length)
+        blockers.push(`${pending.length} класификационни решения`);
+      if (this.generalAudit?.placeholder_fields?.length)
+        blockers.push('new-importer placeholders');
+      if (!noErrors) blockers.push('conformance errors');
+      this.case.markReady(blockers);
+      this.xml =
+        this.direction === 'IM'
+          ? xmlio.emitText(decl, tpl)
+          : bg515c.emitText(decl);
+      const runDir = path.join(
+        runsDir(),
+        `run-${safe(this.clientId, 'client')}-${safe(this.invoice.invoice_number, 'draft')}`,
+      );
+      await fs.mkdir(runDir, { recursive: true });
+      const src = path.join(runDir, 'source');
+      await fs.mkdir(src, { recursive: true });
+      for (const f of this.sourceFiles)
+        try {
+          await fs.copyFile(f, path.join(src, path.basename(f)));
+        } catch {}
+      await reportMod.saveRun(
+        decl,
+        rep,
+        this.invoice,
+        runDir,
+        this.direction === 'EX',
+      );
+      await workflow.saveAudit(runDir, {
+        client_id: this.clientId,
+        direction: this.direction,
+        invoice: this.invoice,
+        dossier_files: this.sourceFiles,
+        dossier_entries: this.dossier,
+        report: rep,
+        conformance: this.issues,
+        approved: false,
+        case_state: this.case.toJSON(),
+      });
+      this.trace = workflow.buildCaseTrace({
+        client_id: this.clientId,
+        direction: this.direction,
+        invoice: this.invoice,
+        packing: this.packing,
+        waybill: this.waybill,
+        dossier_entries: this.dossier,
+        report: rep,
+        conformance: this.issues,
+        case_state: this.case.toJSON(),
+      });
+      await workflow.saveCaseTrace(runDir, this.trace);
+      this.lastRunDir = runDir;
+      this.casePackage = null;
+      this.log(
+        `build: rev ${this.case.case_revision}, ${this.issues.filter((i) => i.level === 'ERROR').length} errors`,
+      );
+      return {
+        ok: true,
+        stage: this.case.stage,
+        blockers: this.currentBlockers(),
+      };
+    });
+  }
+  async updateInvoice(invoice: any, caseId: any, baseRevision: any) {
+    this.assertCaseVersion(caseId, baseRevision);
+    extract.validateInvoice(invoice);
+    if (deepEqual(invoice, this.invoice)) return { ok: true, changed: false };
+    this.case.bump('human-confirmed invoice correction');
+    this.invoice = clone(invoice);
+    this.decl = this.declEx = null;
+    this.xml = '';
+    this.report = {};
+    this.issues = [];
+    await this.persist();
+    this.log('фактура: потвърдена корекция → STALE');
+    return { ok: true, changed: true };
+  }
   // Human correction of built declaration positions (IM). Applies a batch under one version guard,
   // then header totals FOLLOW the edited items (human is source of truth), conformance re-runs,
   // XML regenerates. Not a redistribution: builds anchor totals exactly; edits stay verbatim.
-  async updateDeclItems(rows:any[],caseId:any,baseRevision:any){
-    this.assertCaseVersion(caseId,baseRevision);this.case.assertMutable('declaration item edit');
-    const d=this.decl;if(!d)throw new Error('Първо генерирайте декларация (②).');
-    const items=d.GOODSSHIPMENT?.GOODITEM||[];if(!items.length)throw new Error('Няма позиции за редакция.');
-    const list=Array.isArray(rows)?rows:[];if(!list.length)return{ok:true,changed:false};
-    const P2=(v:any)=>{const n=Number(String(v??'').replace(',','.'));if(!Number.isFinite(n)||n<0)throw new Error('Невалидно число: '+v);return n.toFixed(2)};
-    const P6=(v:any)=>{const n=Number(String(v??'').replace(',','.'));if(!Number.isFinite(n)||n<0)throw new Error('Невалидно число: '+v);return n.toFixed(6)};
-    let touched=0;
-    for(const r of list){
-      const i=Number(r?.item_no)-1;if(!Number.isInteger(i)||i<0||i>=items.length)throw new Error('Няма такава позиция: '+r?.item_no);
-      const it=items[i],p=r?.patch||{};let t=false;
-      if(p.price!=null&&String(p.price)!==''){it.Commodity.ItemPrice=P2(p.price);t=true}
-      if(p.statistical_value!=null&&String(p.statistical_value)!==''){it.StatisticalValue=P2(p.statistical_value);t=true}
-      if(p.net_kg!=null&&String(p.net_kg)!==''){it.Commodity.GOODSMEASURE.NetMassKg=P6(p.net_kg);t=true}
-      if(p.gross_kg!=null&&String(p.gross_kg)!==''){const g=P6(p.gross_kg);if(Number(g)+1e-9<Number(it.Commodity.GOODSMEASURE.NetMassKg))throw new Error(`Позиция ${r.item_no}: брутото е под нетото.`);it.Commodity.GOODSMEASURE.GrossMassKg=g;t=true}
-      if(p.origin!=null&&String(p.origin)!==''){const o=String(p.origin).trim().toUpperCase();if(!/^[A-Z]{2}$/.test(o))throw new Error(`Позиция ${r.item_no}: произходът е 2-буквен ISO код.`);it.ORIGIN.CountryOfOrigin=o;t=true}
-      if(p.description!=null&&String(p.description)!==''){it.Commodity.descriptionOfGoods=String(p.description).replace(/\s+/g,' ').trim().slice(0,510);t=true}
-      if(t){touched++;const gi=(this.report?.goods_items||[])[i];if(gi){if(p.price!=null&&String(p.price)!=='')gi.price=it.Commodity.ItemPrice;if(p.statistical_value!=null&&String(p.statistical_value)!=='')gi.statistical_value=it.StatisticalValue;if(p.net_kg!=null&&String(p.net_kg)!=='')gi.net_kg=it.Commodity.GOODSMEASURE.NetMassKg;if(p.gross_kg!=null&&String(p.gross_kg)!=='')gi.gross_kg=it.Commodity.GOODSMEASURE.GrossMassKg;if(p.origin!=null&&String(p.origin)!=='')gi.origin=it.ORIGIN.CountryOfOrigin;if(p.description!=null&&String(p.description)!=='')gi.description=it.Commodity.descriptionOfGoods}}
+  async updateDeclItems(rows: any[], caseId: any, baseRevision: any) {
+    this.assertCaseVersion(caseId, baseRevision);
+    this.case.assertMutable('declaration item edit');
+    if (!this.decl) throw new Error('Първо генерирайте декларация (②).');
+    const d = clone(this.decl),
+      goods = clone(this.report?.goods_items || []);
+    const items = d.GOODSSHIPMENT?.GOODITEM || [];
+    if (!items.length) throw new Error('Няма позиции за редакция.');
+    const list = Array.isArray(rows) ? rows : [];
+    if (!list.length) return { ok: true, changed: false };
+    const P2 = (v: any) => {
+      const n = Number(String(v ?? '').replace(',', '.'));
+      if (!Number.isFinite(n) || n < 0)
+        throw new Error('Невалидно число: ' + v);
+      return n.toFixed(2);
+    };
+    const P6 = (v: any) => {
+      const n = Number(String(v ?? '').replace(',', '.'));
+      if (!Number.isFinite(n) || n < 0)
+        throw new Error('Невалидно число: ' + v);
+      return n.toFixed(6);
+    };
+    let touched = 0;
+    for (const r of list) {
+      const i = Number(r?.item_no) - 1;
+      if (!Number.isInteger(i) || i < 0 || i >= items.length)
+        throw new Error('Няма такава позиция: ' + r?.item_no);
+      const it = items[i],
+        p = r?.patch || {};
+      let t = false;
+      if (p.price != null && String(p.price) !== '') {
+        it.Commodity.ItemPrice = P2(p.price);
+        t = true;
+      }
+      if (p.statistical_value != null && String(p.statistical_value) !== '') {
+        it.StatisticalValue = P2(p.statistical_value);
+        t = true;
+      }
+      if (p.net_kg != null && String(p.net_kg) !== '') {
+        it.Commodity.GOODSMEASURE.NetMassKg = P6(p.net_kg);
+        t = true;
+      }
+      if (p.gross_kg != null && String(p.gross_kg) !== '') {
+        const g = P6(p.gross_kg);
+        if (Number(g) + 1e-9 < Number(it.Commodity.GOODSMEASURE.NetMassKg))
+          throw new Error(`Позиция ${r.item_no}: брутото е под нетото.`);
+        it.Commodity.GOODSMEASURE.GrossMassKg = g;
+        t = true;
+      }
+      if (p.origin != null && String(p.origin) !== '') {
+        const o = String(p.origin).trim().toUpperCase();
+        if (!/^[A-Z]{2}$/.test(o))
+          throw new Error(
+            `Позиция ${r.item_no}: произходът е 2-буквен ISO код.`,
+          );
+        it.ORIGIN.CountryOfOrigin = o;
+        t = true;
+      }
+      if (p.description != null && String(p.description) !== '') {
+        it.Commodity.descriptionOfGoods = String(p.description)
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 510);
+        t = true;
+      }
+      if (t) {
+        touched++;
+        const gi = goods[i];
+        if (gi) {
+          if (p.price != null && String(p.price) !== '')
+            gi.price = it.Commodity.ItemPrice;
+          if (p.statistical_value != null && String(p.statistical_value) !== '')
+            gi.statistical_value = it.StatisticalValue;
+          if (p.net_kg != null && String(p.net_kg) !== '')
+            gi.net_kg = it.Commodity.GOODSMEASURE.NetMassKg;
+          if (p.gross_kg != null && String(p.gross_kg) !== '')
+            gi.gross_kg = it.Commodity.GOODSMEASURE.GrossMassKg;
+          if (p.origin != null && String(p.origin) !== '')
+            gi.origin = it.ORIGIN.CountryOfOrigin;
+          if (p.description != null && String(p.description) !== '')
+            gi.description = it.Commodity.descriptionOfGoods;
+        }
+      }
     }
-    if(!touched)return{ok:true,changed:false};
-    d.DECHEA.TotalAmountInvoiced=items.reduce((a:number,x:any)=>a+Number(x.Commodity.ItemPrice||0),0).toFixed(2);
-    d.DECHEA.TotalGrossMassKg=items.reduce((a:number,x:any)=>a+Number(x.Commodity.GOODSMEASURE.GrossMassKg||0),0).toFixed(6);
+    if (!touched) return { ok: true, changed: false };
+    d.DECHEA.TotalAmountInvoiced = items
+      .reduce((a: number, x: any) => a + Number(x.Commodity.ItemPrice || 0), 0)
+      .toFixed(2);
+    d.DECHEA.TotalGrossMassKg = items
+      .reduce(
+        (a: number, x: any) =>
+          a + Number(x.Commodity.GOODSMEASURE.GrossMassKg || 0),
+        0,
+      )
+      .toFixed(6);
+    const issues = conformance.check(d, this.caseTemplate),
+      xml = xmlio.emitText(d, this.caseTemplate),
+      fp = this.case.built_fingerprint || '';
+    this.decl = d;
+    if (this.report?.goods_items) this.report.goods_items = goods;
+    this.issues = issues;
+    this.xml = xml;
     this.case.bump(`human-corrected declaration items (${touched})`);
-    this.issues=conformance.check(d,this.caseTemplate);this.case.markValidated(!this.issues.some(i=>i.level==='ERROR'));
-    this.xml=xmlio.emitText(d,this.caseTemplate);
-    await this.persist();this.log(`декларация: ръчна корекция на ${touched} позиция(и) — общите суми следват редакцията`);
-    return{ok:true,changed:true,errors:this.issues.filter(i=>i.level==='ERROR').length}
+    this.case.markBuilt(fp);
+    this.case.markValidated(!issues.some((i) => i.level === 'ERROR'));
+    this.case.markReady(this.currentBlockers());
+    await this.persist();
+    this.log(
+      `декларация: ръчна корекция на ${touched} позиция(и) — общите суми следват редакцията`,
+    );
+    return {
+      ok: true,
+      changed: true,
+      errors: this.issues.filter((i) => i.level === 'ERROR').length,
+    };
   }
-  async saveContext(ctx:any,caseId:any,baseRevision:any){this.assertCaseVersion(caseId,baseRevision);const [,_c]=resolveContext(this.caseTemplate||{}, {declaration_context:ctx},this.direction);if(deepEqual(ctx,this.declarationContext))return{ok:true,changed:false};this.case.bump('human-confirmed H1 context');this.declarationContext=clone(ctx);this.decl=this.declEx=null;this.xml='';this.report={};this.issues=[];await this.persist();this.log('H1 контекст: потвърден → STALE');return{ok:true,changed:true}}
-  async approveClassification(itemNo:any,entry:any,caseId:any,baseRevision:any){this.assertCaseVersion(caseId,baseRevision);this.case.assertMutable('classification approval');if(!this.invoice)throw new Error('няма активна фактура');const row=this.classificationRows().find((r:any)=>String(r.item_no)===String(itemNo));if(!row)throw new Error('classification row not found');const code=`${entry.hs?.hs6||''}${entry.hs?.cn||'00'}${entry.hs?.taric||'00'}`,decision=review.validateDecision({group:row.group,line_nos:row.line_nos||[],approved_code:code,origin:String(entry.origin||row.origin||'').toUpperCase(),declaration_description:String(entry.bg_name||row.description||''),source:'human_verified',confirmed_at:new Date().toISOString()});this.classificationDecisions[row.group]=decision;const durable={...entry,key:entry.key||row.group,source:'human_verified',aliases:entry.aliases?.length?entry.aliases:row.descriptions||[row.description]};const cid=this.durableClientId();if(cid)await (await Catalog.load(catalogDir(),cid)).saveAppend(durable,cid);this.caseCatalog.entries=this.caseCatalog.entries.filter(e=>e.key!==durable.key);this.caseCatalog.entries.push(clone(durable));await review.save(runsDir(),this.clientId,this.invoice,this.classificationDecisions);this.invoice=review.apply(this.invoice,this.classificationDecisions);this.case.bump('human-confirmed classification');await this.persist();this.log(`класификация: ${row.group} → ${code} (human_verified)`);return{ok:true,stale:true}}
-  async approveAllClassifications(caseId:any,baseRevision:any){this.assertCaseVersion(caseId,baseRevision);this.case.assertMutable('classification approval');if(!this.invoice)throw new Error('няма активна фактура');const rows=this.pendingReviews();if(!rows.length)return{ok:true,approved:0};const cid=this.durableClientId();const catalog=cid?await Catalog.load(catalogDir(),cid):null;let done=0,skipped=0;for(const row of rows){const hs=String(row.decl_hs||'').replace(/\D/g,'');if(hs.length<8){skipped++;continue}const entry={key:row.group,hs:{hs6:hs.slice(0,6),cn:hs.slice(6,8),taric:hs.slice(8,10)||'00'},origin:String(row.origin||'').toUpperCase(),bg_name:row.description,source:'human_verified',aliases:row.descriptions?.length?row.descriptions:[row.description]};this.classificationDecisions[row.group]=review.validateDecision({group:row.group,line_nos:row.line_nos||[],approved_code:hs,origin:entry.origin,declaration_description:entry.bg_name,source:'human_verified',confirmed_at:new Date().toISOString()});if(catalog&&cid)await catalog.saveAppend(entry,cid);this.caseCatalog.entries=this.caseCatalog.entries.filter(e=>e.key!==entry.key);this.caseCatalog.entries.push(clone(entry));done++}if(done){await review.save(runsDir(),this.clientId,this.invoice,this.classificationDecisions);this.invoice=review.apply(this.invoice,this.classificationDecisions);this.case.bump(`bulk human-confirmed classification (${done})`);await this.persist();this.log(`класификация: потвърдени всички — ${done}${skipped?`, пропуснати без код: ${skipped}`:''}`)}return{ok:true,approved:done,skipped,stale:true}}
-  async catalogSave(entry:any){const cid=this.durableClientId();if(!cid)throw new Error('Изберете запазен клиент.');const durable=await Catalog.load(catalogDir(),cid);await durable.saveAppend(entry,cid);this.log(`каталог durable: записан ${entry.key}; текущият case НЕ е променен`);return{ok:true,current_case_changed:false}}
-  async catalogDelete(key:string){const cid=this.durableClientId();if(!cid)throw new Error('Изберете запазен клиент.');const durable=await Catalog.load(catalogDir(),cid);await durable.delete(key,cid);this.log(`каталог durable: изтрит ${key}; текущият case НЕ е променен`);return{ok:true,current_case_changed:false}}
-  durableClientId(){return general.isNewClient(this.clientId)?this.intakeClientId:this.clientId}
-  async saveNewClientDurable(values:any,r:any){const eori=String(values.importer_eori||'').trim();if(!eori||eori===general.PLACEHOLDER_IMPORTER_EORI){this.log('нов клиент: EORI на вносител е placeholder — профил не се записва','warn');return}const id=general.clientIdFromEori(eori);const tpl=clone(r.template);tpl.client_id=id;await clients.saveTemplate(tpl);this.intakeClientId=id;const cat=await Catalog.load(catalogDir(),id);for(const e of (r.catalog?.entries||[])){if(e?.placeholder)continue;await cat.saveAppend(e,id)}this.log(`нов клиент запазен като профил: ${id}`)}
-  async submitNewImporter(values:any,caseId:any,baseRevision:any){this.assertCaseVersion(caseId,baseRevision);this.case.assertMutable('new-importer intake');if(!this.invoice)throw new Error('първо извлечете фактура');const errs=general.validate(values,this.invoice);if(errs.length)return{ok:false,errors:errs,error:errs.join('\n')};if(!deepEqual(values,this.generalSubmitted)){this.generalSubmitted=clone(values);const r=general.build(this.invoice,this.packing,values);this.generalAudit=r.audit;this.generalExtras=r.extras;this.declarationContext=clone(r.extras.declaration_context||{});await this.saveNewClientDurable(values,r);this.case.bump('human-confirmed new-importer H1 intake')}await this.persist();return{ok:true}}
-  async approve(tag:string,caseId:any,baseRevision:any){
-    this.assertCaseVersion(caseId,baseRevision);
-    if(!this.decl&&!this.declEx)throw new Error('Няма генерирана декларация (②).');
-    let extras:any={};
-    if(general.isNewClient(this.clientId))extras=clone(this.generalExtras||{});else if(this.buildParams.case_lrn)extras.lrn=this.buildParams.case_lrn;
-    if(this.declarationContext)extras.declaration_context=clone(this.declarationContext);
-    const cur=String(this.invoice?.currency||'').toUpperCase();
-    if(cur&&cur!=='EUR'&&this.buildParams.fx_rate){extras.exchange_rate=String(Number(String(this.buildParams.fx_rate).replace(',','.')));extras.exchange_rate_date=this.fxInfo?.date||null}
-    if(this.packing){const[patch]=packingMod.extractMasses(this.invoice,this.packing);Object.assign(extras,patch)}
-    if(this.waybill){if(this.waybill.gross_kg!=null)extras.total_gross_kg=String(this.waybill.gross_kg);if(this.waybill.pieces!=null)extras.total_packages=String(this.waybill.pieces);if(this.waybill.waybill_number)(extras.transport_documents??=[]).push({type:'N740',referenceNumber:String(this.waybill.waybill_number)})}
-    extras.additional_refs=this.buildParams.spec_refs.filter((r:any)=>r.code&&r.reference).map((r:any)=>({type:String(r.code),referenceNumber:String(r.reference)}));
-    extras.additional_refs_scope=this.buildParams.spec_all?'all':'first';
-    if(this.buildParams.ak_valuation)extras.valuation_freight_total=this.buildParams.ak_valuation;
-    if(this.buildParams.bc_valuation)extras.valuation_insurance_total=this.buildParams.bc_valuation;
-    for(const [name,e] of Object.entries(this.dossier) as any){if(!e.invoice||name===this.invoiceName)continue;(extras.dossier_docs??=[]).push({class:'invoice',number:e.invoice.invoice_number,date:e.invoice.invoice_date,label:'ТРАНСПОРТ',count:1});if(e.invoice.grand_total&&!extras.valuation_freight_total)extras.valuation_freight_total=String(e.invoice.grand_total)}
-    const fp=fingerprint(this.canonicalSnapshot(extras)),drift=this.case.driftBlockers(fp),blockers=[...this.currentBlockers(),...drift];
-    if(blockers.length)throw new Error('Експортът е блокиран:\n- '+blockers.join('\n- '));
+  async saveContext(ctx: any, caseId: any, baseRevision: any) {
+    this.assertCaseVersion(caseId, baseRevision);
+    const [, _c] = resolveContext(
+      this.caseTemplate || {},
+      { declaration_context: ctx },
+      this.direction,
+    );
+    if (deepEqual(ctx, this.declarationContext))
+      return { ok: true, changed: false };
+    this.case.bump('human-confirmed H1 context');
+    this.declarationContext = clone(ctx);
+    this.decl = this.declEx = null;
+    this.xml = '';
+    this.report = {};
+    this.issues = [];
+    await this.persist();
+    this.log('H1 контекст: потвърден → STALE');
+    return { ok: true, changed: true };
+  }
+  async approveClassification(
+    itemNo: any,
+    entry: any,
+    caseId: any,
+    baseRevision: any,
+  ) {
+    this.assertCaseVersion(caseId, baseRevision);
+    this.case.assertMutable('classification approval');
+    if (!this.invoice) throw new Error('няма активна фактура');
+    const row = this.classificationRows().find(
+      (r: any) => String(r.item_no) === String(itemNo),
+    );
+    if (!row) throw new Error('classification row not found');
+    const code = `${entry.hs?.hs6 || ''}${entry.hs?.cn || '00'}${entry.hs?.taric || '00'}`,
+      decision = review.validateDecision({
+        group: row.group,
+        line_nos: row.line_nos || [],
+        approved_code: code,
+        origin: String(entry.origin || row.origin || '').toUpperCase(),
+        declaration_description: String(entry.bg_name || row.description || ''),
+        source: 'human_verified',
+        confirmed_at: new Date().toISOString(),
+      });
+    this.classificationDecisions[row.group] = decision;
+    const durable = {
+      ...entry,
+      key:
+        entry.key ||
+        productKey(String(entry.bg_name || row.description || ''), row.group),
+      source: 'human_verified',
+      aliases: entry.aliases?.length
+        ? entry.aliases
+        : row.descriptions || [row.description],
+    };
+    const cid = this.durableClientId();
+    if (cid)
+      await (await Catalog.load(catalogDir(), cid)).saveAppend(durable, cid);
+    this.caseCatalog.entries = this.caseCatalog.entries.filter(
+      (e) => e.key !== durable.key,
+    );
+    this.caseCatalog.entries.push(clone(durable));
+    await review.save(
+      runsDir(),
+      this.clientId,
+      this.invoice,
+      this.classificationDecisions,
+    );
+    this.invoice = review.apply(this.invoice, this.classificationDecisions);
+    this.case.bump('human-confirmed classification');
+    await this.persist();
+    this.log(`класификация: ${row.group} → ${code} (human_verified)`);
+    return { ok: true, stale: true };
+  }
+  async approveAllClassifications(caseId: any, baseRevision: any) {
+    this.assertCaseVersion(caseId, baseRevision);
+    this.case.assertMutable('classification approval');
+    if (!this.invoice) throw new Error('няма активна фактура');
+    const rows = this.pendingReviews();
+    if (!rows.length) return { ok: true, approved: 0 };
+    const cid = this.durableClientId();
+    const catalog = cid ? await Catalog.load(catalogDir(), cid) : null;
+    let done = 0,
+      skipped = 0;
+    for (const row of rows) {
+      const hs = String(row.decl_hs || '').replace(/\D/g, '');
+      if (hs.length < 8) {
+        skipped++;
+        continue;
+      }
+      const entry = {
+        key: productKey(String(row.description || ''), row.group),
+        hs: {
+          hs6: hs.slice(0, 6),
+          cn: hs.slice(6, 8),
+          taric: hs.slice(8, 10) || '00',
+        },
+        origin: String(row.origin || '').toUpperCase(),
+        bg_name: row.description,
+        source: 'human_verified',
+        aliases: row.descriptions?.length
+          ? row.descriptions
+          : [row.description],
+      };
+      this.classificationDecisions[row.group] = review.validateDecision({
+        group: row.group,
+        line_nos: row.line_nos || [],
+        approved_code: hs,
+        origin: entry.origin,
+        declaration_description: entry.bg_name,
+        source: 'human_verified',
+        confirmed_at: new Date().toISOString(),
+      });
+      if (catalog && cid) await catalog.saveAppend(entry, cid);
+      this.caseCatalog.entries = this.caseCatalog.entries.filter(
+        (e) => e.key !== entry.key,
+      );
+      this.caseCatalog.entries.push(clone(entry));
+      done++;
+    }
+    if (done) {
+      await review.save(
+        runsDir(),
+        this.clientId,
+        this.invoice,
+        this.classificationDecisions,
+      );
+      this.invoice = review.apply(this.invoice, this.classificationDecisions);
+      this.case.bump(`bulk human-confirmed classification (${done})`);
+      await this.persist();
+      this.log(
+        `класификация: потвърдени всички — ${done}${skipped ? `, пропуснати без код: ${skipped}` : ''}`,
+      );
+    }
+    return { ok: true, approved: done, skipped, stale: true };
+  }
+  async catalogSave(entry: any) {
+    const cid = this.durableClientId();
+    if (!cid) throw new Error('Изберете запазен клиент.');
+    const durable = await Catalog.load(catalogDir(), cid);
+    await durable.saveAppend(entry, cid);
+    this.log(
+      `каталог durable: записан ${entry.key}; текущият case НЕ е променен`,
+    );
+    return { ok: true, current_case_changed: false };
+  }
+  async catalogDelete(key: string) {
+    const cid = this.durableClientId();
+    if (!cid) throw new Error('Изберете запазен клиент.');
+    const durable = await Catalog.load(catalogDir(), cid);
+    await durable.delete(key, cid);
+    this.log(`каталог durable: изтрит ${key}; текущият case НЕ е променен`);
+    return { ok: true, current_case_changed: false };
+  }
+  durableClientId() {
+    return general.isNewClient(this.clientId)
+      ? this.intakeClientId
+      : this.clientId;
+  }
+  async saveNewClientDurable(values: any, r: any) {
+    const eori = String(values.importer_eori || '').trim();
+    if (!eori || eori === general.PLACEHOLDER_IMPORTER_EORI) {
+      this.log(
+        'нов клиент: EORI на вносител е placeholder — профил не се записва',
+        'warn',
+      );
+      return;
+    }
+    const id = general.clientIdFromEori(eori);
+    const tpl = clone(r.template);
+    tpl.client_id = id;
+    await clients.saveTemplate(tpl);
+    this.intakeClientId = id;
+    const cat = await Catalog.load(catalogDir(), id);
+    for (const e of r.catalog?.entries || []) {
+      if (e?.placeholder) continue;
+      await cat.saveAppend(e, id);
+    }
+    this.log(`нов клиент запазен като профил: ${id}`);
+  }
+  async submitNewImporter(values: any, caseId: any, baseRevision: any) {
+    this.assertCaseVersion(caseId, baseRevision);
+    this.case.assertMutable('new-importer intake');
+    if (!this.invoice) throw new Error('първо извлечете фактура');
+    const errs = general.validate(values, this.invoice);
+    if (errs.length) return { ok: false, errors: errs, error: errs.join('\n') };
+    if (!deepEqual(values, this.generalSubmitted)) {
+      this.generalSubmitted = clone(values);
+      const r = general.build(this.invoice, this.packing, values);
+      this.generalAudit = r.audit;
+      this.generalExtras = r.extras;
+      this.declarationContext = clone(r.extras.declaration_context || {});
+      await this.saveNewClientDurable(values, r);
+      this.case.bump('human-confirmed new-importer H1 intake');
+    }
+    await this.persist();
+    return { ok: true };
+  }
+  async approve(tag: string, caseId: any, baseRevision: any) {
+    this.assertCaseVersion(caseId, baseRevision);
+    if (!this.decl && !this.declEx)
+      throw new Error('Няма генерирана декларация (②).');
+    let extras: any = {};
+    if (general.isNewClient(this.clientId))
+      extras = clone(this.generalExtras || {});
+    else if (this.buildParams.case_lrn) extras.lrn = this.buildParams.case_lrn;
+    if (this.declarationContext)
+      extras.declaration_context = clone(this.declarationContext);
+    const cur = String(this.invoice?.currency || '').toUpperCase();
+    if (cur && cur !== 'EUR' && this.buildParams.fx_rate) {
+      extras.exchange_rate = String(
+        Number(String(this.buildParams.fx_rate).replace(',', '.')),
+      );
+      extras.exchange_rate_date = this.fxInfo?.date || null;
+    }
+    if (this.packing) {
+      const [patch] = packingMod.extractMasses(this.invoice, this.packing);
+      Object.assign(extras, patch);
+    }
+    if (this.waybill) {
+      if (this.waybill.gross_kg != null && extras.total_gross_kg == null)
+        extras.total_gross_kg = String(this.waybill.gross_kg);
+      if (this.waybill.pieces != null)
+        extras.total_packages = String(this.waybill.pieces);
+      if (this.waybill.waybill_number) {
+        (extras.transport_documents ??= []).push({
+          type: 'N740',
+          referenceNumber: String(this.waybill.waybill_number),
+        });
+        const arrivalId = String(this.waybill.waybill_number);
+        if (
+          extras.arrival_transport == null &&
+          arrivalId.length <= conformance.ALPHA_TEXT_LIMITS.arrivalMeans
+        )
+          extras.arrival_transport = {
+            IdeOfMeaOfTraAtArrival: arrivalId,
+            IdeOfMeaOfTraAtArrivalCode: '40',
+          };
+      }
+    }
+    extras.additional_refs = this.buildParams.spec_refs
+      .filter((r: any) => r.code && r.reference)
+      .map((r: any) => ({
+        type: String(r.code),
+        referenceNumber: String(r.reference),
+      }));
+    extras.additional_refs_scope = this.buildParams.spec_all ? 'all' : 'first';
+    if (this.buildParams.ak_valuation)
+      extras.valuation_freight_total = this.buildParams.ak_valuation;
+    if (this.buildParams.bc_valuation)
+      extras.valuation_insurance_total = this.buildParams.bc_valuation;
+    if (this.buildParams.prev_doc_ref)
+      extras.previous_documents = [
+        {
+          type: this.buildParams.prev_doc_type || 'N337',
+          referenceNumber: this.buildParams.prev_doc_ref,
+        },
+      ];
+    const cessionTrusted =
+      this.cession &&
+      (!this.cession.waybill_number ||
+        !this.waybill?.waybill_number ||
+        String(this.cession.waybill_number) ===
+          String(this.waybill.waybill_number));
+    if (cessionTrusted) {
+      if (!extras.previous_documents?.length && this.cession.mrn_item)
+        extras.previous_documents = [
+          { type: 'N337', referenceNumber: String(this.cession.mrn_item) },
+        ];
+      if (
+        extras.arrival_transport == null &&
+        this.cession.arrival_id &&
+        String(this.cession.arrival_id).length <=
+          conformance.ALPHA_TEXT_LIMITS.arrivalMeans
+      )
+        extras.arrival_transport = {
+          IdeOfMeaOfTraAtArrival: String(this.cession.arrival_id),
+          IdeOfMeaOfTraAtArrivalCode: String(this.cession.arrival_code || '40'),
+        };
+    }
+    for (const [name, e] of Object.entries(this.dossier) as any) {
+      if (!e.invoice || name === this.invoiceName) continue;
+      (extras.dossier_docs ??= []).push({
+        class: 'invoice',
+        number: e.invoice.invoice_number,
+        date: e.invoice.invoice_date,
+        label: 'ТРАНСПОРТ',
+        count: 1,
+      });
+      if (e.invoice.grand_total && !extras.valuation_freight_external)
+        extras.valuation_freight_external = String(e.invoice.grand_total);
+    }
+    const fp = fingerprint(this.canonicalSnapshot(extras)),
+      drift = this.case.driftBlockers(fp),
+      blockers = [...this.currentBlockers(), ...drift];
+    if (blockers.length)
+      throw new Error('Експортът е блокиран:\n- ' + blockers.join('\n- '));
 
-    const frozenState=new CaseState(this.case.toJSON()); frozenState.markApproved(); frozenState.markExported();
-    await fs.mkdir(this.alphaExports,{recursive:true});
-    const fname=reportMod.exportFilename(this.direction==='IM'?'H':'B',tag),final=await this.uniquePath(this.alphaExports,fname),approvedDir=path.join(runsDir(),`approved-${safe(this.clientId,'client')}-${safe(this.invoice?.invoice_number,'draft')}-${Date.now()}`);
-    await fs.mkdir(path.join(approvedDir,'source'),{recursive:true});
-    for(const f of this.sourceFiles)try{await fs.copyFile(f,path.join(approvedDir,'source',path.basename(f)))}catch{}
-    const xml=this.direction==='IM'?xmlio.emitText(this.decl,this.caseTemplate):bg515c.emitText(this.declEx);
-    const approvedXml=path.join(approvedDir,fname); await fs.writeFile(approvedXml,xml,{encoding:'utf8',flag:'wx'});
-    const frozen={schema:'declgen.approved-case/v3',frozen_at:new Date().toISOString(),case_id:this.caseId,case_state:frozenState.toJSON(),build_fingerprint:fp,client_id:this.clientId,direction:this.direction,source_manifest:await workflow.dossierManifest(this.sourceFiles,this.dossier),extracted_facts:this.dossier,canonical:{invoice:this.invoice,packing:this.packing,waybill:this.waybill,declaration_context:this.declarationContext,classification_decisions:this.classificationDecisions,build_params:this.buildParams,client_template:this.caseTemplate},report:this.report,conformance:this.issues,declaration:this.decl||this.declEx,xml};
-    await fs.writeFile(path.join(approvedDir,'approved-snapshot.json'),JSON.stringify(frozen,null,2),{encoding:'utf8',flag:'wx'});
-    await workflow.saveAudit(approvedDir,{client_id:this.clientId,direction:this.direction,invoice:this.invoice,dossier_files:this.sourceFiles,dossier_entries:this.dossier,report:this.report,conformance:this.issues,approved:true,case_state:frozenState.toJSON()});
-    await fs.copyFile(approvedXml,final);
-    this.case.markApproved(); this.case.markExported(); await this.persist();
-    this.log(`✔ APPROVED/FROZEN → ${final}`);return{ok:true,file_path:final,approved_snapshot:approvedDir}
+    const frozenState = new CaseState(this.case.toJSON());
+    frozenState.markApproved();
+    frozenState.markExported();
+    await fs.mkdir(this.alphaExports, { recursive: true });
+    const fname = reportMod.exportFilename(
+        this.direction === 'IM' ? 'H' : 'B',
+        tag,
+      ),
+      final = await this.uniquePath(this.alphaExports, fname),
+      approvedDir = path.join(
+        runsDir(),
+        `approved-${safe(this.clientId, 'client')}-${safe(this.invoice?.invoice_number, 'draft')}-${Date.now()}`,
+      );
+    await fs.mkdir(path.join(approvedDir, 'source'), { recursive: true });
+    for (const f of this.sourceFiles)
+      try {
+        await fs.copyFile(
+          f,
+          path.join(approvedDir, 'source', path.basename(f)),
+        );
+      } catch {}
+    const xml =
+      this.direction === 'IM'
+        ? xmlio.emitText(this.decl, this.caseTemplate)
+        : bg515c.emitText(this.declEx);
+    const approvedXml = path.join(approvedDir, fname);
+    await fs.writeFile(approvedXml, xml, { encoding: 'utf8', flag: 'wx' });
+    const frozen = {
+      schema: 'declgen.approved-case/v3',
+      frozen_at: new Date().toISOString(),
+      case_id: this.caseId,
+      case_state: frozenState.toJSON(),
+      build_fingerprint: fp,
+      client_id: this.clientId,
+      direction: this.direction,
+      source_manifest: await workflow.dossierManifest(
+        this.sourceFiles,
+        this.dossier,
+      ),
+      extracted_facts: this.dossier,
+      canonical: {
+        invoice: this.invoice,
+        packing: this.packing,
+        waybill: this.waybill,
+        declaration_context: this.declarationContext,
+        classification_decisions: this.classificationDecisions,
+        build_params: this.buildParams,
+        client_template: this.caseTemplate,
+      },
+      report: this.report,
+      conformance: this.issues,
+      declaration: this.decl || this.declEx,
+      xml,
+    };
+    await fs.writeFile(
+      path.join(approvedDir, 'approved-snapshot.json'),
+      JSON.stringify(frozen, null, 2),
+      { encoding: 'utf8', flag: 'wx' },
+    );
+    await workflow.saveAudit(approvedDir, {
+      client_id: this.clientId,
+      direction: this.direction,
+      invoice: this.invoice,
+      dossier_files: this.sourceFiles,
+      dossier_entries: this.dossier,
+      report: this.report,
+      conformance: this.issues,
+      approved: true,
+      case_state: frozenState.toJSON(),
+    });
+    await fs.copyFile(approvedXml, final);
+    this.case.markApproved();
+    this.case.markExported();
+    await this.persist();
+    this.log(`✔ APPROVED/FROZEN → ${final}`);
+    return { ok: true, file_path: final, approved_snapshot: approvedDir };
   }
-  async uniquePath(dir:string,name:string){const ext=path.extname(name),base=path.basename(name,ext);for(let i=0;i<10000;i++){const p=path.join(dir,i?`${base}-${i}${ext}`:name);try{await fs.access(p)}catch{return p}}throw new Error('could not create unique export name')}
-  async casePackageBuild(){if(!this.lastRunDir)throw new Error('Първо генерирайте декларация (②).');this.casePackage=await workflow.exportCasePackage(this.lastRunDir);await this.persist();return{ok:true,path:this.casePackage}}
-  async fxFetch(currency:string){this.case.assertMutable('fetch FX rate');const r=await fx.getRate(currency,new Date(),path.join(runsDir(),'.fxcache'));this.fxInfo=r;await this.persist();return{ok:true,rate:String(r.rate),date:r.date}}
-  async llmStatus(){const[text,vis]=await Promise.all([llm.serverUp(llm.CONFIG.text_url,600),vision.visionServerUp(vision.CURRENT.url,600)]);return{ok:true,text:{available:text,url:llm.CONFIG.text_url,model:llm.CONFIG.model},vision:{available:vis,url:vision.CURRENT.url,model:vision.CURRENT.model}}}
-  async configureLlm(body:any){const role=body.role==='vision'?'vision':'text';if(role==='text')llm.configureText(body.url||llm.CONFIG.text_url,body.api_key,body.model);else vision.configureVision(body.url||vision.CURRENT.url,body.api_key,body.model);return{ok:true}}
-  async verifyLlm(body:any){await this.configureLlm(body);return body.role==='vision'?{ok:true,result:await vision.verifyVision()}:{ok:true,result:await llm.verifyText()}}
-  async chatLlm(body:any){if(body.role==='vision')throw new Error('Vision chat requires an image; use live verification.');return{ok:true,reply:await llm.chat([{role:'user',content:String(body.prompt||'')}],{temperature:body.temperature??0,max_tokens:body.max_tokens??2048})}}
-  async pidsOnPort(port:number){if(process.platform!=='win32')return[];try{const{stdout}=await execFileP('netstat',['-ano','-p','tcp'],{timeout:15000});const pids=new Set<number>();for(const ln of stdout.split(/\r?\n/)){const t=ln.trim().split(/\s+/);if(t.length>=5&&t[0]==='TCP'&&t[3]==='LISTENING'&&t[1].split(':').pop()===String(port)&&!['0','4'].includes(t[4]))pids.add(Number(t[4]))}return[...pids]}catch{return[]}}
-  private localLlmEndpoint(role:string){const raw=role==='vision'?vision.CURRENT.url:llm.CONFIG.text_url;const u=new URL(raw.includes('://')?raw:`http://${raw}`);if(!['127.0.0.1','localhost','::1'].includes((u.hostname||'').toLowerCase()))throw new Error('Старт/стоп е разрешен само за локален LLM endpoint.');return{url:raw,port:Number(u.port|| (u.protocol==='https:'?443:80))}}
-  async llmStop(role:string){const {port}=this.localLlmEndpoint(role);for(const pid of await this.pidsOnPort(port))await execFileP('taskkill',['/F','/PID',String(pid)],{timeout:15000}).catch(()=>null);return{ok:true}}
-  async llmStart(role:string){if(process.platform!=='win32')throw new Error('Локалният LLM starter е Windows-only.');this.localLlmEndpoint(role);const starter=role==='vision'?String.raw`C:\ai\start-qwen3vl-fixed.vbs`:String.raw`C:\ai\start-local-ai.vbs`;if(!fsSync.existsSync(starter))throw new Error(`стартерът липсва: ${starter}`);spawn('wscript.exe',[starter],{detached:true,stdio:'ignore'}).unref();return{ok:true}}
-  async taricSearch(query:string,invoiceHs=''){try{const candidates=await taric.searchCandidates(query,invoiceHs);if(!candidates.length)return{ok:false,error:'Няма намерени кандидати за този текст.'};return{ok:true,candidates}}catch(e){return{ok:false,error:`TARIC справката е временно недостъпна: ${e instanceof Error?e.message:e}`}}}
-  state(){return{ok:true,case_id:this.caseId,task:this.task,has_decl:!!(this.decl||this.declEx),auto_ident:this.buildParams.auto_ident,client_id:this.clientId,direction:this.direction,dossier:Object.fromEntries(Object.entries(this.dossier).map(([k,v]:any)=>[k,{type:v.type,confidence:v.confidence,scanned_without_text:!v.doc?.text&&v.type==='scanned',needs_ocr:v.needs_ocr}])),invoice:this.invoice,report:this.report,issues:this.issues,unresolved_count:this.pendingReviews().length,fx_rate:this.buildParams.fx_rate||this.fxInfo?.rate||'',fx_info:this.fxInfo,ak_valuation:this.buildParams.ak_valuation,bc_valuation:this.buildParams.bc_valuation,spec_all:this.buildParams.spec_all,spec_refs:this.buildParams.spec_refs,general_submitted:!!this.generalSubmitted,declaration_context:this.declarationContext,case_state:this.case.toJSON(),case_revision:this.case.case_revision,built_from_revision:this.case.built_from_revision,validated_revision:this.case.validated_revision,stage:this.case.stage,readiness:this.readiness()}}
-  async dashboard(){let eori='';if(this.caseTemplate)eori=this.caseTemplate.importer_tin||this.caseTemplate.exporter_id||'';const rec=this.decl&&this.invoice?workflow.reconcileInvoiceDeclaration(this.invoice,this.decl):{rows:[],errors:[],warnings:[]};const reconciliation=(rec.rows||[]).map((r:any)=>({metric:r[0],source:r[1],decl:r[2],diff:r[3],ok:r[4]!==false}));return{ok:true,case_id:this.caseId,case_revision:this.case.case_revision,dashboard:{case_id:this.caseId,case_revision:this.case.case_revision,readiness:this.readiness(),client:{name:this.clientId,eori},dossier:{files_count:this.sourceFiles.length,invoices:Object.values(this.dossier).filter((x:any)=>x.invoice).length,packings:Object.values(this.dossier).filter((x:any)=>x.packing).length,waybills:Object.values(this.dossier).filter((x:any)=>x.waybill).length},invoice:{number:this.invoice?.invoice_number,date:this.invoice?.invoice_date,lines_count:this.invoice?.lines?.length||0,seller:this.invoice?.seller?.company,grand_total:this.invoice?.grand_total,currency:this.invoice?.currency},declaration:{stage:this.case.stage,revision:this.case.case_revision,stat_eur:this.report?.goods_items?.reduce((a:number,g:any)=>a+Number(g.statistical_value||0),0)?.toFixed(2)},reconciliation,changes:(this.report?.grouping||[]).map((g:any)=>({line_no:(g.line_nos||[]).join(','),inv_hs:(g.invoice_codes||[]).join(','),decl_hs:g.declaration_hs,reason:g.source,desc:(g.descriptions||[]).join('; ')})),blockers:this.currentBlockers(),warnings:[...(this.report?.warnings||[]),...(rec.warnings||[])]}}}
-  async clientDetail(id:string){const t=await clients.load(id);return{ok:true,template:t}}
-  historySnapshot(user:any){if(!this.invoice&&!this.xml)throw new Error('Няма какво да се запише — първо извлечете документи.');const items=this.report?.goods_items||[];const netSum=items.reduce((a:number,g:any)=>a+Number(g.net_kg||0),0);return{id:randomUUID().replace(/-/g,''),saved_at:new Date().toISOString(),user_id:user?.user_id||'local',user_name:user?.name||'локален',client_id:this.clientId,direction:this.direction,invoice_number:this.invoice?.invoice_number||null,case_revision:this.case.case_revision,case_stage:this.case.stage,files:this.sourceFiles.map(f=>path.basename(f)),invoice_total:this.invoice?.grand_total??null,totals:{invoiced:this.decl?.DECHEA?.TotalAmountInvoiced||null,currency:this.decl?.DECHEA?.InvoiceCurrency||String(this.invoice?.currency||''),net_kg:netSum?netSum.toFixed(3):null,gross_kg:this.decl?.DECHEA?.TotalGrossMassKg||null,packages:this.decl?.DECHEA?.TotalPackages||null},items:items.map((g:any)=>({item_no:g.item_no,hs_code:g.hs_code,description:g.description,net_kg:g.net_kg,price:g.price,statistical_value:g.statistical_value,origin:g.origin})),xml:this.xml||null}}
-  async catalogEntries(id:string){if(!id||general.isNewClient(id))return{ok:true,entries:[]};return{ok:true,entries:(await Catalog.load(catalogDir(),id)).entries}}
-  async profileInspect(file:string){const result=await profileImport.inspect(file);return{ok:true,result}}
-  async profileSave(result:any,id:string,values:any){const t=profileImport.buildTemplate(result,id,values);const p=await profileImport.saveTemplate(t);this.log(`клиентски профил записан: ${id}; отвореният case не е променен`);return{ok:true,path:p}}
-  async request(endpointWithQuery:string,method='GET',body:any={}){const u=new URL(endpointWithQuery,'http://local'),ep=u.pathname;switch(`${method.toUpperCase()} ${ep}`){case'GET /api/state':return this.state();case'GET /api/dashboard':return this.dashboard();case'GET /api/logs':{const since=Number(u.searchParams.get('since')||0);return{ok:true,logs:this.logs.filter(x=>x.id>since)}}case'GET /api/classification':return{ok:true,case_id:this.caseId,case_revision:this.case.case_revision,rows:this.classificationRows(),dirty:this.case.stage==='STALE'};case'GET /api/catalog':return this.catalogEntries(u.searchParams.get('client_id')||this.clientId);case'GET /api/xml':return{ok:true,case_id:this.caseId,case_revision:this.case.case_revision,stale:!!this.xml&&!this.readiness().ready,xml:this.xml};case'GET /api/trace':return{ok:true,case_id:this.caseId,case_revision:this.case.case_revision,trace:this.trace};case'GET /api/clients':return{ok:true,clients:await clients.listClients()};case'GET /api/clients/detail':return this.clientDetail(u.searchParams.get('client_id')||'');case'GET /api/llm/status':return this.llmStatus();case'POST /api/clients/select':return this.selectClient(body.client_id,body.direction);case'POST /api/dossier/select_folder':return this.selectFolder(body.path);case'POST /api/dossier/extract':return this.extractDossier();case'POST /api/build':return this.build(body);case'POST /api/approve':return this.approve(body.tag,body.case_id,body.base_revision);case'POST /api/task/stop':return this.stop();case'POST /api/clear':return this.clear();case'POST /api/invoice/update':return this.updateInvoice(body.invoice,body.case_id,body.base_revision);case'POST /api/fx/fetch':return this.fxFetch(body.currency);case'POST /api/declaration/items_update':return this.updateDeclItems(body.items,body.case_id,body.base_revision);case'POST /api/h1_context':return this.saveContext(body.context||{},body.case_id,body.base_revision);case'POST /api/classification/approve':return this.approveClassification(body.item_no,body.catalog_entry,body.case_id,body.base_revision);case'POST /api/classification/approve_all':return this.approveAllClassifications(body.case_id,body.base_revision);case'POST /api/catalog/save':return this.catalogSave(body.entry);case'POST /api/catalog/delete':return this.catalogDelete(body.key);case'POST /api/catalog/batch_learn':for(const e of body.entries||[])await this.catalogSave(e);return{ok:true};case'GET /api/new_importer_intake/defaults':if(!this.invoice)throw new Error('първо извлечете фактура');{const defaults=general.defaults(this.invoice,this.packing);if(this.generalSubmitted){const submitted=clone(this.generalSubmitted);Object.assign(defaults,submitted);defaults.goods_hs={...(general.defaults(this.invoice,this.packing).goods_hs||{}),...(submitted.goods_hs||{})}}return{ok:true,defaults}};case'POST /api/new_importer_intake/validate':if(!this.invoice)throw new Error('първо извлечете фактура');{const errors=general.validate(body.values,this.invoice);return{ok:!errors.length,errors}}case'POST /api/new_importer_intake/submit':return this.submitNewImporter(body.values,body.case_id,body.base_revision);case'POST /api/llm/verify':return this.verifyLlm(body);case'POST /api/llm/config':return this.configureLlm(body);case'POST /api/llm/start':return this.llmStart(body.role);case'POST /api/llm/stop':return this.llmStop(body.role);case'POST /api/llm/chat':return this.chatLlm(body);case'POST /api/wan/toggle':return{ok:false,error:'WAN tunneling is intentionally not embedded in the rewrite; use your normal tunnel service if required.'};case'POST /api/search/taric':return this.taricSearch(body.query,body.invoice_hs);case'POST /api/search/web':return{ok:false,error:'No web-search provider is configured. TARIC lookup remains available.'};case'POST /api/profile_import/save':return this.profileSave(body.inspect_result,body.client_id,body.values);case'POST /api/case_package':return this.casePackageBuild();default:throw new Error(`unknown endpoint: ${method} ${ep}`)}}
+  async uniquePath(dir: string, name: string) {
+    const ext = path.extname(name),
+      base = path.basename(name, ext);
+    for (let i = 0; i < 10000; i++) {
+      const p = path.join(dir, i ? `${base}-${i}${ext}` : name);
+      try {
+        await fs.access(p);
+      } catch {
+        return p;
+      }
+    }
+    throw new Error('could not create unique export name');
+  }
+  async casePackageBuild() {
+    if (!this.lastRunDir) throw new Error('Първо генерирайте декларация (②).');
+    this.casePackage = await workflow.exportCasePackage(this.lastRunDir);
+    await this.persist();
+    return { ok: true, path: this.casePackage };
+  }
+  async fxFetch(currency: string) {
+    this.case.assertMutable('fetch FX rate');
+    const r = await fx.getRate(
+      currency,
+      new Date(),
+      path.join(runsDir(), '.fxcache'),
+    );
+    this.fxInfo = r;
+    await this.persist();
+    return { ok: true, rate: String(r.rate), date: r.date };
+  }
+  async llmStatus() {
+    const [text, vis] = await Promise.all([
+      llm.serverUp(llm.CONFIG.text_url, 600),
+      vision.visionServerUp(vision.CURRENT.url, 600),
+    ]);
+    return {
+      ok: true,
+      text: {
+        available: text,
+        url: llm.CONFIG.text_url,
+        model: llm.CONFIG.model,
+      },
+      vision: {
+        available: vis,
+        url: vision.CURRENT.url,
+        model: vision.CURRENT.model,
+      },
+    };
+  }
+  async configureLlm(body: any) {
+    const role = body.role === 'vision' ? 'vision' : 'text';
+    if (role === 'text')
+      llm.configureText(
+        body.url || llm.CONFIG.text_url,
+        body.api_key,
+        body.model,
+      );
+    else
+      vision.configureVision(
+        body.url || vision.CURRENT.url,
+        body.api_key,
+        body.model,
+      );
+    return { ok: true };
+  }
+  async verifyLlm(body: any) {
+    await this.configureLlm(body);
+    return body.role === 'vision'
+      ? { ok: true, result: await vision.verifyVision() }
+      : { ok: true, result: await llm.verifyText() };
+  }
+  async chatLlm(body: any) {
+    if (body.role === 'vision')
+      throw new Error('Vision chat requires an image; use live verification.');
+    return {
+      ok: true,
+      reply: await llm.chat(
+        [{ role: 'user', content: String(body.prompt || '') }],
+        {
+          temperature: body.temperature ?? 0,
+          max_tokens: body.max_tokens ?? 2048,
+        },
+      ),
+    };
+  }
+  async pidsOnPort(port: number) {
+    if (process.platform !== 'win32') return [];
+    try {
+      const { stdout } = await execFileP('netstat', ['-ano', '-p', 'tcp'], {
+        timeout: 15000,
+      });
+      const pids = new Set<number>();
+      for (const ln of stdout.split(/\r?\n/)) {
+        const t = ln.trim().split(/\s+/);
+        if (
+          t.length >= 5 &&
+          t[0] === 'TCP' &&
+          t[3] === 'LISTENING' &&
+          t[1].split(':').pop() === String(port) &&
+          !['0', '4'].includes(t[4])
+        )
+          pids.add(Number(t[4]));
+      }
+      return [...pids];
+    } catch {
+      return [];
+    }
+  }
+  private localLlmEndpoint(role: string) {
+    const raw = role === 'vision' ? vision.CURRENT.url : llm.CONFIG.text_url;
+    const u = new URL(raw.includes('://') ? raw : `http://${raw}`);
+    if (
+      !['127.0.0.1', 'localhost', '::1'].includes(
+        (u.hostname || '').toLowerCase(),
+      )
+    )
+      throw new Error('Старт/стоп е разрешен само за локален LLM endpoint.');
+    return {
+      url: raw,
+      port: Number(u.port || (u.protocol === 'https:' ? 443 : 80)),
+    };
+  }
+  async llmStop(role: string) {
+    const { port } = this.localLlmEndpoint(role);
+    for (const pid of await this.pidsOnPort(port))
+      await execFileP('taskkill', ['/F', '/PID', String(pid)], {
+        timeout: 15000,
+      }).catch(() => null);
+    return { ok: true };
+  }
+  async llmStart(role: string) {
+    if (process.platform !== 'win32')
+      throw new Error('Локалният LLM starter е Windows-only.');
+    this.localLlmEndpoint(role);
+    const starter =
+      role === 'vision'
+        ? String.raw`C:\ai\start-qwen3vl-fixed.vbs`
+        : String.raw`C:\ai\start-local-ai.vbs`;
+    if (!fsSync.existsSync(starter))
+      throw new Error(`стартерът липсва: ${starter}`);
+    spawn('wscript.exe', [starter], {
+      detached: true,
+      stdio: 'ignore',
+    }).unref();
+    return { ok: true };
+  }
+  async taricSearch(query: string, invoiceHs = '') {
+    try {
+      const candidates = await taric.searchCandidates(query, invoiceHs);
+      if (!candidates.length)
+        return { ok: false, error: 'Няма намерени кандидати за този текст.' };
+      return { ok: true, candidates };
+    } catch (e) {
+      return {
+        ok: false,
+        error: `TARIC справката е временно недостъпна: ${e instanceof Error ? e.message : e}`,
+      };
+    }
+  }
+  state() {
+    return {
+      ok: true,
+      case_id: this.caseId,
+      task: this.task,
+      has_decl: !!(this.decl || this.declEx),
+      auto_ident: this.buildParams.auto_ident,
+      client_id: this.clientId,
+      direction: this.direction,
+      dossier: Object.fromEntries(
+        Object.entries(this.dossier).map(([k, v]: any) => [
+          k,
+          {
+            type: v.type,
+            confidence: v.confidence,
+            scanned_without_text: !v.doc?.text && v.type === 'scanned',
+            needs_ocr: v.needs_ocr,
+          },
+        ]),
+      ),
+      invoice: this.invoice,
+      cession: this.cession,
+      report: this.report,
+      issues: this.issues,
+      unresolved_count: this.pendingReviews().length,
+      fx_rate: this.buildParams.fx_rate || this.fxInfo?.rate || '',
+      fx_info: this.fxInfo,
+      ak_valuation: this.buildParams.ak_valuation,
+      bc_valuation: this.buildParams.bc_valuation,
+      spec_all: this.buildParams.spec_all,
+      spec_refs: this.buildParams.spec_refs,
+      prev_doc_type: this.buildParams.prev_doc_type,
+      prev_doc_ref: this.buildParams.prev_doc_ref,
+      general_submitted: !!this.generalSubmitted,
+      declaration_context: this.declarationContext,
+      case_state: this.case.toJSON(),
+      case_revision: this.case.case_revision,
+      built_from_revision: this.case.built_from_revision,
+      validated_revision: this.case.validated_revision,
+      stage: this.case.stage,
+      readiness: this.readiness(),
+    };
+  }
+  async dashboard() {
+    let eori = '';
+    if (this.caseTemplate)
+      eori =
+        this.caseTemplate.importer_tin || this.caseTemplate.exporter_id || '';
+    const rec =
+      this.decl && this.invoice
+        ? workflow.reconcileInvoiceDeclaration(this.invoice, this.decl)
+        : { rows: [], errors: [], warnings: [] };
+    const reconciliation = (rec.rows || []).map((r: any) => ({
+      metric: r[0],
+      source: r[1],
+      decl: r[2],
+      diff: r[3],
+      ok: r[4] !== false,
+    }));
+    return {
+      ok: true,
+      case_id: this.caseId,
+      case_revision: this.case.case_revision,
+      dashboard: {
+        case_id: this.caseId,
+        case_revision: this.case.case_revision,
+        readiness: this.readiness(),
+        client: { name: this.clientId, eori },
+        dossier: {
+          files_count: this.sourceFiles.length,
+          invoices: Object.values(this.dossier).filter((x: any) => x.invoice)
+            .length,
+          packings: Object.values(this.dossier).filter((x: any) => x.packing)
+            .length,
+          waybills: Object.values(this.dossier).filter((x: any) => x.waybill)
+            .length,
+        },
+        invoice: {
+          number: this.invoice?.invoice_number,
+          date: this.invoice?.invoice_date,
+          lines_count: this.invoice?.lines?.length || 0,
+          seller: this.invoice?.seller?.company,
+          grand_total: this.invoice?.grand_total,
+          currency: this.invoice?.currency,
+        },
+        declaration: {
+          stage: this.case.stage,
+          revision: this.case.case_revision,
+          stat_eur: this.report?.goods_items
+            ?.reduce(
+              (a: number, g: any) => a + Number(g.statistical_value || 0),
+              0,
+            )
+            ?.toFixed(2),
+        },
+        reconciliation,
+        changes: (this.report?.grouping || []).map((g: any) => ({
+          line_no: (g.line_nos || []).join(','),
+          inv_hs: (g.invoice_codes || []).join(','),
+          decl_hs: g.declaration_hs,
+          reason: g.source,
+          desc: (g.descriptions || []).join('; '),
+        })),
+        blockers: this.currentBlockers(),
+        warnings: [...(this.report?.warnings || []), ...(rec.warnings || [])],
+      },
+    };
+  }
+  async clientDetail(id: string) {
+    const t = await clients.load(id);
+    return { ok: true, template: t };
+  }
+  historySnapshot(user: any) {
+    if (!this.invoice && !this.xml)
+      throw new Error('Няма какво да се запише — първо извлечете документи.');
+    const items = this.report?.goods_items || [];
+    const netSum = items.reduce(
+      (a: number, g: any) => a + Number(g.net_kg || 0),
+      0,
+    );
+    return {
+      id: randomUUID().replace(/-/g, ''),
+      saved_at: new Date().toISOString(),
+      user_id: user?.user_id || 'local',
+      user_name: user?.name || 'локален',
+      client_id: this.clientId,
+      direction: this.direction,
+      invoice_number: this.invoice?.invoice_number || null,
+      case_revision: this.case.case_revision,
+      case_stage: this.case.stage,
+      files: this.sourceFiles.map((f) => path.basename(f)),
+      invoice_total: this.invoice?.grand_total ?? null,
+      totals: {
+        invoiced: this.decl?.DECHEA?.TotalAmountInvoiced || null,
+        currency:
+          this.decl?.DECHEA?.InvoiceCurrency ||
+          String(this.invoice?.currency || ''),
+        net_kg: netSum ? netSum.toFixed(3) : null,
+        gross_kg: this.decl?.DECHEA?.TotalGrossMassKg || null,
+        packages: this.decl?.DECHEA?.TotalPackages || null,
+      },
+      items: items.map((g: any) => ({
+        item_no: g.item_no,
+        hs_code: g.hs_code,
+        description: g.description,
+        net_kg: g.net_kg,
+        price: g.price,
+        statistical_value: g.statistical_value,
+        origin: g.origin,
+      })),
+      xml: this.xml || null,
+    };
+  }
+  async catalogEntries(id: string) {
+    if (!id || general.isNewClient(id)) return { ok: true, entries: [] };
+    return {
+      ok: true,
+      entries: (await Catalog.load(catalogDir(), id)).entries,
+    };
+  }
+  async profileInspect(file: string) {
+    const result = await profileImport.inspect(file);
+    return { ok: true, result };
+  }
+  async profileSave(result: any, id: string, values: any) {
+    const t = profileImport.buildTemplate(result, id, values);
+    const p = await profileImport.saveTemplate(t);
+    this.log(`клиентски профил записан: ${id}; отвореният case не е променен`);
+    return { ok: true, path: p };
+  }
+  async request(endpointWithQuery: string, method = 'GET', body: any = {}) {
+    const u = new URL(endpointWithQuery, 'http://local'),
+      ep = u.pathname;
+    switch (`${method.toUpperCase()} ${ep}`) {
+      case 'GET /api/state':
+        return this.state();
+      case 'GET /api/dashboard':
+        return this.dashboard();
+      case 'GET /api/logs': {
+        const since = Number(u.searchParams.get('since') || 0);
+        return { ok: true, logs: this.logs.filter((x) => x.id > since) };
+      }
+      case 'GET /api/classification':
+        return {
+          ok: true,
+          case_id: this.caseId,
+          case_revision: this.case.case_revision,
+          rows: this.classificationRows(),
+          dirty: this.case.stage === 'STALE',
+        };
+      case 'GET /api/catalog':
+        return this.catalogEntries(
+          u.searchParams.get('client_id') || this.clientId,
+        );
+      case 'GET /api/xml':
+        return {
+          ok: true,
+          case_id: this.caseId,
+          case_revision: this.case.case_revision,
+          stale: !!this.xml && !this.readiness().ready,
+          xml: this.xml,
+        };
+      case 'GET /api/trace':
+        return {
+          ok: true,
+          case_id: this.caseId,
+          case_revision: this.case.case_revision,
+          trace: this.trace,
+        };
+      case 'GET /api/clients':
+        return { ok: true, clients: await clients.listClients() };
+      case 'GET /api/clients/detail':
+        return this.clientDetail(u.searchParams.get('client_id') || '');
+      case 'GET /api/llm/status':
+        return this.llmStatus();
+      case 'POST /api/clients/select':
+        return this.selectClient(body.client_id, body.direction);
+      case 'POST /api/dossier/select_folder':
+        return this.selectFolder(body.path);
+      case 'POST /api/dossier/extract':
+        return this.extractDossier();
+      case 'POST /api/build':
+        return this.build(body);
+      case 'POST /api/approve':
+        return this.approve(body.tag, body.case_id, body.base_revision);
+      case 'POST /api/task/stop':
+        return this.stop();
+      case 'POST /api/clear':
+        return this.clear();
+      case 'POST /api/invoice/update':
+        return this.updateInvoice(
+          body.invoice,
+          body.case_id,
+          body.base_revision,
+        );
+      case 'POST /api/fx/fetch':
+        return this.fxFetch(body.currency);
+      case 'POST /api/declaration/items_update':
+        return this.updateDeclItems(
+          body.items,
+          body.case_id,
+          body.base_revision,
+        );
+      case 'POST /api/h1_context':
+        return this.saveContext(
+          body.context || {},
+          body.case_id,
+          body.base_revision,
+        );
+      case 'POST /api/classification/approve':
+        return this.approveClassification(
+          body.item_no,
+          body.catalog_entry,
+          body.case_id,
+          body.base_revision,
+        );
+      case 'POST /api/classification/approve_all':
+        return this.approveAllClassifications(body.case_id, body.base_revision);
+      case 'POST /api/catalog/save':
+        return this.catalogSave(body.entry);
+      case 'POST /api/catalog/delete':
+        return this.catalogDelete(body.key);
+      case 'POST /api/catalog/batch_learn':
+        for (const e of body.entries || []) await this.catalogSave(e);
+        return { ok: true };
+      case 'GET /api/new_importer_intake/defaults':
+        if (!this.invoice) throw new Error('първо извлечете фактура');
+        {
+          const defaults = general.defaults(this.invoice, this.packing);
+          if (this.generalSubmitted) {
+            const submitted = clone(this.generalSubmitted);
+            Object.assign(defaults, submitted);
+            defaults.goods_hs = {
+              ...(general.defaults(this.invoice, this.packing).goods_hs || {}),
+              ...(submitted.goods_hs || {}),
+            };
+          }
+          return { ok: true, defaults };
+        }
+      case 'POST /api/new_importer_intake/validate':
+        if (!this.invoice) throw new Error('първо извлечете фактура');
+        {
+          const errors = general.validate(body.values, this.invoice);
+          return { ok: !errors.length, errors };
+        }
+      case 'POST /api/new_importer_intake/submit':
+        return this.submitNewImporter(
+          body.values,
+          body.case_id,
+          body.base_revision,
+        );
+      case 'POST /api/llm/verify':
+        return this.verifyLlm(body);
+      case 'POST /api/llm/config':
+        return this.configureLlm(body);
+      case 'POST /api/llm/start':
+        return this.llmStart(body.role);
+      case 'POST /api/llm/stop':
+        return this.llmStop(body.role);
+      case 'POST /api/llm/chat':
+        return this.chatLlm(body);
+      case 'POST /api/wan/toggle':
+        return {
+          ok: false,
+          error:
+            'WAN tunneling is intentionally not embedded in the rewrite; use your normal tunnel service if required.',
+        };
+      case 'POST /api/search/taric':
+        return this.taricSearch(body.query, body.invoice_hs);
+      case 'POST /api/search/web':
+        return {
+          ok: false,
+          error:
+            'No web-search provider is configured. TARIC lookup remains available.',
+        };
+      case 'POST /api/profile_import/save':
+        return this.profileSave(
+          body.inspect_result,
+          body.client_id,
+          body.values,
+        );
+      case 'POST /api/case_package':
+        return this.casePackageBuild();
+      default:
+        throw new Error(`unknown endpoint: ${method} ${ep}`);
+    }
+  }
 }

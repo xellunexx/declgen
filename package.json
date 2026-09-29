@@ -20,11 +20,11 @@
   "dependencies": {
     "@napi-rs/canvas": "0.1.80",
     "archiver": "7.0.1",
-    "fast-xml-parser": "5.2.5",
+    "fast-xml-parser": "5.11.1",
     "pdfjs-dist": "5.4.149",
     "react": "19.2.0",
     "react-dom": "19.2.0",
-    "xlsx": "0.18.5"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@types/archiver": "7.0.0",
@@ -36,6 +36,7 @@
     "cross-env": "10.1.0",
     "electron": "44.2.0",
     "electron-builder": "26.15.3",
+    "prettier": "3.6.2",
     "typescript": "7.0.2",
     "vite": "8.1.0",
     "wait-on": "9.1.0"
