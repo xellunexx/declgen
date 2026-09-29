@@ -10,7 +10,20 @@
       headers: { 'content-type': 'application/json' },
       body: method === 'GET' ? undefined : JSON.stringify(args.body || {}),
     });
-    const out = await r.json();
+    let out;
+    try {
+      out = await r.json();
+    } catch {
+      out = {
+        ok: false,
+        error: `Сървърът/тунелът върна не-JSON отговор (HTTP ${r.status}) — вероятно тунелът е прекъснал. Опитайте отново.`,
+      };
+      if (typeof window.__telemetryPush === 'function')
+        window.__telemetryPush('api_error', {
+          ep: (args.endpoint || '').slice(0, 80),
+          msg: `non-JSON response, HTTP ${r.status}`,
+        });
+    }
     window.__netlog.push({
       t: t0,
       ep: args.endpoint,

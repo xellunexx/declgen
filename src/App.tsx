@@ -67,7 +67,12 @@ function makeParams(
     specAll: Boolean(state.spec_all ?? true),
     refs: structuredClone(state.spec_refs || []),
     prevDocType: String(state.prev_doc_type || ctxPrev?.type || 'N337'),
-    prevDocRef: String(state.prev_doc_ref || ctxPrev?.referenceNumber || ''),
+    prevDocRef: String(
+      state.prev_doc_ref ||
+        ctxPrev?.referenceNumber ||
+        state.cession?.mrn_item ||
+        '',
+    ),
     autoIdent: Boolean(state.auto_ident ?? true),
   };
 }

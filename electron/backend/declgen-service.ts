@@ -102,6 +102,7 @@ interface Persisted {
   invoiceName: string | null;
   packing: any;
   waybill: any;
+  cession: any;
   fxInfo: any;
   declarationContext: any;
   classificationDecisions: any;
@@ -134,6 +135,7 @@ export class DeclgenService {
   invoiceName: string | null = null;
   packing: any = null;
   waybill: any = null;
+  cession: any = null;
   fxInfo: any = null;
   declarationContext: any = {};
   classificationDecisions: Record<string, any> = {};
@@ -235,6 +237,7 @@ export class DeclgenService {
       invoiceName: p.invoiceName || null,
       packing: p.packing || null,
       waybill: p.waybill || null,
+      cession: p.cession || null,
       fxInfo: p.fxInfo || null,
       declarationContext: p.declarationContext || {},
       classificationDecisions: p.classificationDecisions || {},
@@ -333,6 +336,7 @@ export class DeclgenService {
       invoiceName: this.invoiceName,
       packing: this.packing,
       waybill: this.waybill,
+      cession: this.cession,
       fxInfo: this.fxInfo,
       declarationContext: this.declarationContext,
       classificationDecisions: this.classificationDecisions,
@@ -389,7 +393,7 @@ export class DeclgenService {
       );
     this.invoiceRaw = this.invoice = null;
     this.invoiceName = null;
-    this.packing = this.waybill = this.fxInfo = null;
+    this.packing = this.waybill = this.cession = this.fxInfo = null;
     this.declarationContext = {};
     this.classificationDecisions = {};
     this.generalSubmitted = this.generalAudit = null;
@@ -626,27 +630,42 @@ export class DeclgenService {
             };
           continue;
         }
-        const cls = await extract.classifyDocument(doc),
-          entry: any = {
-            type: cls.type,
-            confidence: cls.confidence,
+        try {
+          const cls = await extract.classifyDocument(doc),
+            entry: any = {
+              type: cls.type,
+              confidence: cls.confidence,
+              doc,
+              source: file,
+            };
+          if (['invoice', 'proforma'].includes(cls.type)) {
+            this.progress(`извличане фактура: ${path.basename(file)}`);
+            entry.invoice = await extract.extractInvoice(doc, {
+              shouldStop: () => this.cancelRequested,
+              buyer: buyerCtx,
+            });
+            if (cls.type === 'proforma') entry.invoice.is_proforma = true;
+          } else if (cls.type === 'packing_list') {
+            this.progress(`извличане packing list: ${path.basename(file)}`);
+            entry.packing = await extract.extractPackingList(doc);
+          } else if (cls.type === 'waybill') {
+            entry.waybill = extract.extractWaybill(doc);
+          } else if (cls.type === 'cession') {
+            entry.cession = extract.extractCession(doc);
+          }
+          entries[path.basename(file)] = entry;
+        } catch (e) {
+          if (e instanceof extract.ExtractionCancelled) throw e;
+          const msg = e instanceof Error ? e.message : String(e);
+          this.log(`${path.basename(file)}: ${msg}`, 'warn');
+          entries[path.basename(file)] = {
+            type: 'unrecognized',
+            confidence: 'error',
+            error: msg,
             doc,
             source: file,
           };
-        if (['invoice', 'proforma'].includes(cls.type)) {
-          this.progress(`извличане фактура: ${path.basename(file)}`);
-          entry.invoice = await extract.extractInvoice(doc, {
-            shouldStop: () => this.cancelRequested,
-            buyer: buyerCtx,
-          });
-          if (cls.type === 'proforma') entry.invoice.is_proforma = true;
-        } else if (cls.type === 'packing_list') {
-          this.progress(`извличане packing list: ${path.basename(file)}`);
-          entry.packing = await extract.extractPackingList(doc);
-        } else if (cls.type === 'waybill') {
-          entry.waybill = extract.extractWaybill(doc);
         }
-        entries[path.basename(file)] = entry;
       }
       this.dossier = entries;
       const financial = Object.entries(entries)
@@ -672,6 +691,25 @@ export class DeclgenService {
         (Object.values(entries).find((e: any) => e.waybill) as any)?.waybill ||
           null,
       );
+      this.cession = clone(
+        (Object.values(entries).find((e: any) => e.cession) as any)?.cession ||
+          null,
+      );
+      if (this.cession) {
+        const wbMatch =
+          !this.cession.waybill_number ||
+          !this.waybill?.waybill_number ||
+          String(this.cession.waybill_number) ===
+            String(this.waybill.waybill_number);
+        this.log(
+          `цесия: ДВС ${this.cession.mrn_item || '—'}` +
+            (this.cession.arrival_id
+              ? `, пристигане ${this.cession.arrival_id}`
+              : '') +
+            (wbMatch ? '' : ` — внимание: товарителница ${this.cession.waybill_number} ≠ ${this.waybill?.waybill_number}`),
+          wbMatch ? 'info' : 'warn',
+        );
+      }
       this.classificationDecisions = await review.load(
         runsDir(),
         this.clientId,
@@ -898,6 +936,33 @@ export class DeclgenService {
             referenceNumber: this.buildParams.prev_doc_ref,
           },
         ];
+      // Cession (temporary-storage letter): auto-apply its ДВС MRN/item and
+      // arrival means only when its waybill matches the dossier waybill — a
+      // foreign cession must never inject its references into the case.
+      const cessionTrusted =
+        this.cession &&
+        (!this.cession.waybill_number ||
+          !this.waybill?.waybill_number ||
+          String(this.cession.waybill_number) ===
+            String(this.waybill.waybill_number));
+      if (cessionTrusted) {
+        if (!baseExtras.previous_documents?.length && this.cession.mrn_item)
+          baseExtras.previous_documents = [
+            { type: 'N337', referenceNumber: String(this.cession.mrn_item) },
+          ];
+        if (
+          baseExtras.arrival_transport == null &&
+          this.cession.arrival_id &&
+          String(this.cession.arrival_id).length <=
+            conformance.ALPHA_TEXT_LIMITS.arrivalMeans
+        )
+          baseExtras.arrival_transport = {
+            IdeOfMeaOfTraAtArrival: String(this.cession.arrival_id),
+            IdeOfMeaOfTraAtArrivalCode: String(
+              this.cession.arrival_code || '40',
+            ),
+          };
+      }
       for (const [name, e] of Object.entries(this.dossier) as any) {
         if (!e.invoice || name === this.invoiceName) continue;
         (baseExtras.dossier_docs ??= []).push({
@@ -1408,6 +1473,28 @@ export class DeclgenService {
           referenceNumber: this.buildParams.prev_doc_ref,
         },
       ];
+    const cessionTrusted =
+      this.cession &&
+      (!this.cession.waybill_number ||
+        !this.waybill?.waybill_number ||
+        String(this.cession.waybill_number) ===
+          String(this.waybill.waybill_number));
+    if (cessionTrusted) {
+      if (!extras.previous_documents?.length && this.cession.mrn_item)
+        extras.previous_documents = [
+          { type: 'N337', referenceNumber: String(this.cession.mrn_item) },
+        ];
+      if (
+        extras.arrival_transport == null &&
+        this.cession.arrival_id &&
+        String(this.cession.arrival_id).length <=
+          conformance.ALPHA_TEXT_LIMITS.arrivalMeans
+      )
+        extras.arrival_transport = {
+          IdeOfMeaOfTraAtArrival: String(this.cession.arrival_id),
+          IdeOfMeaOfTraAtArrivalCode: String(this.cession.arrival_code || '40'),
+        };
+    }
     for (const [name, e] of Object.entries(this.dossier) as any) {
       if (!e.invoice || name === this.invoiceName) continue;
       (extras.dossier_docs ??= []).push({
@@ -1683,6 +1770,7 @@ export class DeclgenService {
         ]),
       ),
       invoice: this.invoice,
+      cession: this.cession,
       report: this.report,
       issues: this.issues,
       unresolved_count: this.pendingReviews().length,

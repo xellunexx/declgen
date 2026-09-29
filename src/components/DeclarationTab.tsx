@@ -467,6 +467,7 @@ export function DeclarationTab({
   );
   const refConfirmed =
     !!docType && !!prevDocRef.trim() && savedDocRef === prevDocRef.trim();
+  const cessionRef = String(state.cession?.mrn_item || '');
   async function confirmPrevDoc() {
     const ref = prevDocRef.trim();
     if (!docType || !ref)
@@ -656,6 +657,8 @@ export function DeclarationTab({
                     ? 'записано в случая'
                     : `в случая: ${savedDocRef}`}
                 </Badge>
+              ) : cessionRef && prevDocRef.trim() === cessionRef ? (
+                <Badge tone="success">от цесията в досието</Badge>
               ) : (
                 <Badge tone="warning">не е записано</Badge>
               )}

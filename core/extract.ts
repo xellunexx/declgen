@@ -5,6 +5,7 @@ export const DOC_TYPES = [
   'proforma',
   'packing_list',
   'waybill',
+  'cession',
   'permit',
   'certificate',
   'other',
@@ -12,7 +13,7 @@ export const DOC_TYPES = [
 const CLASSIFY_SYSTEM =
   'You are a document classifier for a Bulgarian customs brokerage. Reply with strict JSON only.';
 const CLASSIFY_USER = (text: string) =>
-  `Classify this document as invoice, proforma, packing_list, waybill, permit, certificate, or other. Reply JSON {"type":"...","language":"...","confidence":0.0,"evidence":"..."}. DOCUMENT TEXT:\n${text}`;
+  `Classify this document as invoice, proforma, packing_list, waybill, cession, permit, certificate, or other. Reply JSON {"type":"...","language":"...","confidence":0.0,"evidence":"..."}. DOCUMENT TEXT:\n${text}`;
 const INVOICE_SYSTEM =
   'You extract data from commercial invoices for Bulgarian customs declarations. Be literal. Never invent data. Missing fields are null. Every numeric field (qty, unit_price, subtotal, totals, weights) is a plain decimal number using a dot (e.g. 18.96), with no currency symbol, no thousand separators and no trailing unit text. Reply strict JSON only.';
 const INVOICE_USER = (text: string, tables: string) =>
@@ -1158,6 +1159,18 @@ export async function classifyDocument(input: any) {
       confidence: 1,
       evidence: 'deterministic carrier waybill shipment fields',
     };
+  // Temporary-storage cession letter (DHL/FedEx warehouse release): the
+  // MRN/items reference is the H1 previous-document (N337) source.
+  if (
+    /временно\s+складиране|ц\s*е\s*с\s*и\s*я/i.test(t) &&
+    /\d{2}BG\d{6,}U\d/i.test(t)
+  )
+    return {
+      type: 'cession',
+      language: 'bg',
+      confidence: 1,
+      evidence: 'temporary-storage cession header with MRN/item reference',
+    };
   return await extractJson(
     [
       { role: 'system', content: CLASSIFY_SYSTEM },
@@ -1212,6 +1225,39 @@ export function extractWaybill(doc: any) {
         ? 'deterministic FedEx waybill extraction'
         : 'deterministic DHL waybill extraction',
     ],
+  };
+}
+// Temporary-storage cession letter (цесия): carries the ДВС MRN/item that
+// becomes the H1 PreviousDocument (N337), plus the arrival means (flight),
+// transport mode, courier waybill and piece/gross summary.
+export function extractCession(doc: any) {
+  const text =
+      typeof doc === 'object' ? String(doc.text || '') : String(doc || ''),
+    mrn = text.match(/(\d{2}BG\d{6,}U\d+)\s*\/\s*(\d+)/i),
+    waybill = (
+      grab(text, /ТОВАРИТЕЛНИЦ[АЯ]\s*[:№N-]*\s*([0-9 ]{8,20})/i) || ''
+    ).replace(/\s+/g, ''),
+    arrivalId =
+      grab(text, /ПОЛЕТ\s*[-–—:]?\s*([A-Z]{2}[A-Z0-9]{1,7})/i) ||
+      grab(
+        text,
+        /ИДЕНТИФИКАЦИЯ\s+НА\s+ТРАНСП\.?\s*СРЕДСТВО[^0-9A-ZА-Я]*(?:[A-ZА-Я]+\s*[-–—]\s*)?([A-Z]{2}[A-Z0-9]{1,7})/i,
+      ),
+    transportCode = grab(text, /ТИП\s+НА\s+ТРАНСПОРТА\s*(\d{2})/i),
+    pkg =
+      text.match(/Колет\s+(\d+)\s+([0-9][0-9.,]*)/i) ||
+      text.match(/БРОЙ[^\n]*\n[^\d\n]*(\d+)\s+([0-9][0-9.,]*)/i);
+  if (!mrn && !waybill && !arrivalId)
+    throw new ExtractionError('cession: no storage-declaration facts');
+  return {
+    mrn_item: mrn ? `${mrn[1].toUpperCase()} / ${mrn[2]}` : null,
+    waybill_number: waybill || null,
+    arrival_id: arrivalId ? arrivalId.toUpperCase() : null,
+    arrival_code: transportCode || (arrivalId ? '40' : null),
+    pieces: pkg ? Number(pkg[1]) : null,
+    gross_kg: pkg ? Number(pkg[2].replaceAll(',', '.')) : null,
+    recipient: grab(text, /ПОЛУЧАТЕЛ\s+([^\n]{2,60})/i),
+    _warnings: ['deterministic cession extraction'],
   };
 }
 export async function extractPackingList(doc: any) {

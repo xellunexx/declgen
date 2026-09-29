@@ -107,6 +107,15 @@ export interface AppState {
   spec_refs?: SpecRef[];
   prev_doc_type?: string;
   prev_doc_ref?: string;
+  cession?: {
+    mrn_item?: string | null;
+    waybill_number?: string | null;
+    arrival_id?: string | null;
+    arrival_code?: string | null;
+    pieces?: number | null;
+    gross_kg?: number | null;
+    recipient?: string | null;
+  } | null;
   general_submitted?: boolean;
   declaration_context?: Record<string, unknown>;
   wan_status?: string;
